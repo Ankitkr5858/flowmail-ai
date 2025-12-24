@@ -63,6 +63,7 @@ Required env vars for the gateway (set in your host environment):
 - `SMTP_PORT=587`
 - `SMTP_SECURE=false`
 - `SMTP_FROM=jimmy@peremis.com`
+- `SMTP_EHLO_NAME=peremis.com` (recommended for Google Workspace SMTP Relay; must be a Workspace domain)
 - Optional auth (only if your relay requires it):
   - `SMTP_USER=...`
   - `SMTP_PASS=...`

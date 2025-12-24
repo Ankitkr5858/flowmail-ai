@@ -29,14 +29,17 @@ module.exports = {
         NODE_ENV: "production",
         // Port that the gateway listens on locally (Nginx will proxy to this)
         PORT: "8787",
+        // Bind locally so the gateway is not exposed publicly (reverse proxy will access it)
+        BIND_HOST: "127.0.0.1",
 
         // Protect the gateway endpoint (/send) with a Bearer token
-        MAIL_GATEWAY_TOKEN: "CHANGE_ME__GENERATE_A_RANDOM_TOKEN",
+        MAIL_GATEWAY_TOKEN: "79624b628f9abc60f75bdac534dab5f244fd438c3ced7b54e084dd780d799604",
 
         // Google SMTP Relay (typical defaults)
         SMTP_HOST: "smtp-relay.gmail.com",
         SMTP_PORT: "587",
         SMTP_SECURE: "false",
+        SMTP_EHLO_NAME: "peremis.com",
 
         // From address used for outbound mail
         SMTP_FROM: "jimmy@peremis.com",

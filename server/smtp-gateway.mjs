@@ -6,6 +6,9 @@ app.use(express.json({ limit: '2mb' }));
 
 const token = process.env.MAIL_GATEWAY_TOKEN || '';
 const port = Number(process.env.PORT || 8787);
+// Some panels/process managers accidentally inject quoted env values like `"127.0.0.1"`.
+// Strip quotes to avoid Node trying to DNS-resolve a hostname like `"0.0.0.0"`.
+const bindHost = String(process.env.BIND_HOST || '0.0.0.0').replace(/"/g, '').trim();
 
 function requireAuth(req, res, next) {
   const got = String(req.headers.authorization || '');
@@ -29,12 +32,25 @@ function createTransport() {
   const secure = envBool(process.env.SMTP_SECURE, port === 465);
   const user = process.env.SMTP_USER || '';
   const pass = process.env.SMTP_PASS || '';
+  const from = process.env.SMTP_FROM || '';
+  // For Google Workspace SMTP Relay, the EHLO/HELO name often must be one of your Workspace domains
+  // (otherwise you may see: 550-5.7.1 Invalid credentials for relay ... must present one of your domain names).
+  const ehloNameRaw = process.env.SMTP_EHLO_NAME || '';
+  const ehloNameClean = String(ehloNameRaw).replace(/"/g, '').trim();
+  const fromDomain = String(from).match(/@([^>\s]+)>?\s*$/)?.[1]?.trim() || '';
+  const ehloName = ehloNameClean || fromDomain;
 
   // Google SMTP Relay often uses IP allowlist and may not require auth.
   const auth = user && pass ? { user, pass } : undefined;
 
   if (!host) throw new Error('SMTP_HOST not set');
-  return nodemailer.createTransport({ host, port, secure, auth });
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth,
+    name: ehloName || undefined,
+  });
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
@@ -65,9 +81,9 @@ app.post('/send', requireAuth, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+app.listen(port, bindHost, () => {
   // eslint-disable-next-line no-console
-  console.log(`[smtp-gateway] listening on :${port}`);
+  console.log(`[smtp-gateway] listening on ${bindHost}:${port}`);
 });
 
 
