@@ -29,7 +29,7 @@ const Sidebar: React.FC = () => {
   const fullName =
     (auth.user as any)?.user_metadata?.full_name ||
     (auth.user as any)?.user_metadata?.name ||
-    'Signed in';
+    (auth.status === 'signed_in' ? 'Signed in' : auth.status === 'signed_out' ? 'Not signed in' : 'Not connected');
   const initials = (() => {
     const s = String(fullName || userEmail || 'U').trim();
     const parts = s.split(/\s+/).filter(Boolean);
@@ -86,14 +86,25 @@ const Sidebar: React.FC = () => {
             <p className="text-sm font-semibold text-slate-900 truncate">{String(fullName)}</p>
             <p className="text-xs text-slate-500 truncate">{userEmail}</p>
           </div>
-          <button
-            type="button"
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void authActions.signOut(); }}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
-            title="Sign out"
-          >
-            <LogOut className="app-icon app-icon-muted w-4 h-4" />
-          </button>
+          {auth.status === 'signed_in' ? (
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); void authActions.signOut(); }}
+              className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+              title="Sign out"
+            >
+              <LogOut className="app-icon app-icon-muted w-4 h-4" />
+            </button>
+          ) : (
+            <NavLink
+              to="/login"
+              onClick={(e) => e.stopPropagation()}
+              className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+              title="Sign in"
+            >
+              <LogOut className="app-icon app-icon-muted w-4 h-4 rotate-180" />
+            </NavLink>
+          )}
         </div>
       </div>
     </div>

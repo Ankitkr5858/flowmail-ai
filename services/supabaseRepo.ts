@@ -25,7 +25,7 @@ type Table = 'contacts' | 'campaigns' | 'automations';
 function shouldSeedDemoData(): boolean {
   // Default OFF for production. Turn on explicitly in dev if you want sample data.
   const p = (globalThis as any)?.process;
-  const v = String((import.meta as any)?.env?.VITE_SEED_DEMO_DATA ?? p?.env?.VITE_SEED_DEMO_DATA ?? '')
+  const v = String(import.meta.env.VITE_SEED_DEMO_DATA ?? p?.env?.VITE_SEED_DEMO_DATA ?? '')
     .trim()
     .toLowerCase();
   return v === 'true' || v === '1' || v === 'yes';

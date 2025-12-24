@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (!sb) return;
         await sb.auth.signOut();
         // Hard refresh to ensure all cached app state resets behind RLS.
-        window.location.assign(window.location.origin);
+        window.location.assign(`${window.location.origin}/login`);
       },
     };
   }, []);

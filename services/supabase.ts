@@ -11,20 +11,18 @@ function envFromGlobalProcess(key: string): string {
 }
 
 export function getSupabaseUrl(): string {
-  // Prefer Vite env
-  const url = envString((import.meta as any)?.env?.VITE_SUPABASE_URL);
-  if (url) return url;
-  return envFromGlobalProcess('VITE_SUPABASE_URL');
+  // Prefer Vite env (must be accessed directly so Vite can statically replace it)
+  const url = envString(import.meta.env.VITE_SUPABASE_URL);
+  return url || envFromGlobalProcess('VITE_SUPABASE_URL');
 }
 
 export function getSupabaseAnonKey(): string {
-  const key = envString((import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY);
-  if (key) return key;
-  return envFromGlobalProcess('VITE_SUPABASE_ANON_KEY');
+  const key = envString(import.meta.env.VITE_SUPABASE_ANON_KEY);
+  return key || envFromGlobalProcess('VITE_SUPABASE_ANON_KEY');
 }
 
 export function getWorkspaceId(): string {
-  const ws = envString((import.meta as any)?.env?.VITE_WORKSPACE_ID) || envFromGlobalProcess('VITE_WORKSPACE_ID');
+  const ws = envString(import.meta.env.VITE_WORKSPACE_ID) || envFromGlobalProcess('VITE_WORKSPACE_ID');
   return ws || 'default';
 }
 

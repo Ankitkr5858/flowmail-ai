@@ -19,6 +19,7 @@ import { parseContactsCsv } from './services/csvImport';
 import { invokeEdgeFunction } from './services/edgeFunctions';
 import ConfirmDialog from './components/ConfirmDialog';
 import AlertDialog from './components/AlertDialog';
+import LoginView from './components/LoginView';
 
 const App: React.FC = () => {
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
@@ -228,6 +229,7 @@ const App: React.FC = () => {
       <main className="ml-64 flex-1 p-8 h-screen overflow-y-auto relative">
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/login" element={<LoginView />} />
           <Route
             path="/dashboard"
             element={
