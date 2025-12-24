@@ -142,6 +142,7 @@ If it returns `{ "ok": true }`, the gateway is live.
 - `SUPABASE_SERVICE_ROLE_KEY=...`
 - `MAIL_GATEWAY_URL=https://<your-smtp-gateway-host>`
 - `MAIL_GATEWAY_TOKEN=...` (same token as gateway)
+- `DEFAULT_FROM_EMAIL=jimmy@peremis.com` (used to populate `email_sends.from_email` for reporting)
 - `PUBLIC_FUNCTIONS_BASE_URL=https://<project-ref>.supabase.co/functions/v1`
 - `UNSUBSCRIBE_SIGNING_KEY=...` (random string)
 - Optional (notify action default recipient):
@@ -200,7 +201,7 @@ Deploy it:
 ## Tracking (opens/clicks) without Resend
 We track opens/clicks using our own endpoints:
 - `GET /track/open?sid=<email_send_id>` (pixel)
-- `GET /track/click?sid=<email_send_id>&url=<encoded>` (redirect)
+- `GET /track/click?sid=<email_send_id>&url=<encoded>&bid=<blockId>` (redirect + heatmap attribution)
 
 Deploy:
 - `supabase functions deploy track`

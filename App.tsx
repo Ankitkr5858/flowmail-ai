@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import CampaignCreator from './components/CampaignCreator';
@@ -35,6 +35,9 @@ const App: React.FC = () => {
   const [composeForContactId, setComposeForContactId] = useState<string | null>(null);
   const [confirmSendId, setConfirmSendId] = useState<string | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
+  const [sendPreviewBusy, setSendPreviewBusy] = useState(false);
+  const [sendPreview, setSendPreview] = useState<{ eligibleCount: number; limit: number; fromEmail: string | null } | null>(null);
+  const [sendPreviewError, setSendPreviewError] = useState<string | null>(null);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
 
   const { state, actions } = useAppStore();
@@ -192,10 +195,10 @@ const App: React.FC = () => {
     try {
       setSendBusy(true);
       const data = await invokeEdgeFunction<any>('send-campaign', { campaignId, workspaceId: 'default', limit: 50 });
-      const sentCount = Number((data as any)?.sent ?? 0);
+      const queuedCount = Number((data as any)?.queued ?? 0);
       actions.updateCampaign(campaignId, {
         status: 'Sent',
-        sentCount,
+        sentCount: queuedCount,
         openCount: 0,
         clickCount: 0,
         conversionCount: 0,
@@ -203,7 +206,7 @@ const App: React.FC = () => {
         clickRate: '0.0%',
         date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       });
-      setAlert({ title: 'Sent', message: `Sent to ${sentCount} recipients via Resend.` });
+      setAlert({ title: 'Queued', message: `Queued ${queuedCount} emails for delivery via SMTP.` });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setAlert({ title: 'Send failed', message: msg });
@@ -211,6 +214,46 @@ const App: React.FC = () => {
       setSendBusy(false);
     }
   };
+
+  // Pre-flight recipient preview for the confirm modal
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!confirmSendId) {
+        setSendPreview(null);
+        setSendPreviewError(null);
+        setSendPreviewBusy(false);
+        return;
+      }
+      try {
+        setSendPreviewBusy(true);
+        setSendPreview(null);
+        setSendPreviewError(null);
+        const data = await invokeEdgeFunction<any>('send-campaign', {
+          campaignId: confirmSendId,
+          workspaceId: 'default',
+          limit: 50,
+          dryRun: true,
+          sampleSize: 0,
+        });
+        if (cancelled) return;
+        const eligibleCount = Number((data as any)?.eligibleCount ?? 0);
+        const limit = Number((data as any)?.limit ?? 50);
+        const fromEmail = (data as any)?.fromEmail ? String((data as any).fromEmail) : null;
+        setSendPreview({ eligibleCount, limit, fromEmail });
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setSendPreviewError(msg);
+      } finally {
+        if (!cancelled) setSendPreviewBusy(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [confirmSendId]);
 
   return (
     <div className="flex min-h-screen bg-transparent">
@@ -350,11 +393,17 @@ const App: React.FC = () => {
       <ConfirmDialog
         isOpen={!!confirmSendId}
         title="Send campaign now?"
-        description="This will send the campaign using Resend and mark it as Sent."
+        description={
+          sendPreviewBusy
+            ? 'Loading recipient preview…'
+            : sendPreviewError
+              ? `Could not load recipient preview.\n\nYou can still send if you want.\n\nError: ${sendPreviewError}`
+              : `This will enqueue emails and deliver via your SMTP Gateway.\n\nRecipients (limit ${sendPreview?.limit ?? 50}): ${sendPreview?.eligibleCount ?? 0}\nFrom: ${sendPreview?.fromEmail ?? '(not set)'}\n\nTo see the full recipient list after you send, open Reports → select this campaign.`
+        }
         confirmText="Send Now"
         cancelText="Cancel"
-        isLoading={sendBusy}
-        onCancel={() => setConfirmSendId(null)}
+        isLoading={sendBusy || sendPreviewBusy}
+        onCancel={() => { setConfirmSendId(null); }}
         onConfirm={() => {
           const id = confirmSendId;
           setConfirmSendId(null);

@@ -3,7 +3,7 @@
 // Open pixel:
 //   GET /track/open?sid=<email_sends.id>
 // Click redirect:
-//   GET /track/click?sid=<email_sends.id>&url=<encoded>
+//   GET /track/click?sid=<email_sends.id>&url=<encoded>&bid=<blockId>
 //
 // This replaces Resend webhooks when using SMTP relay.
 //
@@ -105,28 +105,33 @@ Deno.serve(async (req) => {
 
     if (path.endsWith("/click")) {
       const url = u.searchParams.get("url") ?? "";
-      if (!send.clicked_at) {
+      const bid = u.searchParams.get("bid") ?? "";
+      const isFirstClick = !send.clicked_at;
+      if (isFirstClick) {
         await dbFetch(`email_sends?workspace_id=eq.${encodeURIComponent(workspaceId)}&id=eq.${encodeURIComponent(sid)}`, {
           method: "PATCH",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify({ clicked_at: nowIso, updated_at: nowIso }),
         });
-        if (contactId) {
-          await bumpMetric(workspaceId, contactId, "click");
-          await dbFetch("contact_events", {
-            method: "POST",
-            headers: { Prefer: "return=minimal" },
-            body: JSON.stringify([{
-              workspace_id: workspaceId,
-              contact_id: contactId,
-              event_type: "link_click",
-              title: "Link Clicked",
-              occurred_at: nowIso,
-              campaign_id: campaignId || null,
-              meta: { sid, url },
-            }]),
-          });
-        }
+      }
+      if (contactId) {
+        // Keep contact metric increment as "first click per send" so we don't inflate totals.
+        if (isFirstClick) await bumpMetric(workspaceId, contactId, "click");
+
+        // Always record every click event (used for real link + block heatmaps).
+        await dbFetch("contact_events", {
+          method: "POST",
+          headers: { Prefer: "return=minimal" },
+          body: JSON.stringify([{
+            workspace_id: workspaceId,
+            contact_id: contactId,
+            event_type: "link_click",
+            title: "Link Clicked",
+            occurred_at: nowIso,
+            campaign_id: campaignId || null,
+            meta: { sid, url, bid: String(bid || ""), first: isFirstClick },
+          }]),
+        });
       }
       return new Response(null, { status: 302, headers: { Location: url || "https://example.com" } });
     }

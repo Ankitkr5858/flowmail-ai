@@ -85,10 +85,13 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   try {
+    const defaultFromEmail = (Deno.env.get("DEFAULT_FROM_EMAIL") ?? "").trim();
     const body = await req.json().catch(() => ({}));
     const campaignId = String(body?.campaignId ?? "").trim();
     const workspaceId = String(body?.workspaceId ?? "default").trim() || "default";
     const limit = Math.max(1, Math.min(200, Number(body?.limit ?? 50)));
+    const dryRun = Boolean(body?.dryRun);
+    const sampleSize = Math.max(0, Math.min(25, Number(body?.sampleSize ?? 10)));
     if (!campaignId) return json({ error: "Missing campaignId" }, 400);
 
     // Load campaign
@@ -119,7 +122,20 @@ Deno.serve(async (req) => {
       }))
       .filter((c: any) => Boolean(c.email));
 
-    if (recipients.length === 0) return json({ sent: 0, message: "No eligible recipients" });
+    if (dryRun) {
+      return json({
+        ok: true,
+        dryRun: true,
+        campaignId,
+        workspaceId,
+        eligibleCount: recipients.length,
+        limit,
+        fromEmail: defaultFromEmail || null,
+        sampleEmails: recipients.slice(0, sampleSize).map((r: any) => r.email),
+      });
+    }
+
+    if (recipients.length === 0) return json({ queued: 0, message: "No eligible recipients" });
 
     // Enqueue per-recipient. SMTP delivery is handled by `email-send-worker`.
     const now = new Date().toISOString();
@@ -128,6 +144,7 @@ Deno.serve(async (req) => {
       campaign_id: campaignId,
       contact_id: r.id || null,
       to_email: r.email,
+      from_email: defaultFromEmail || null,
       subject,
       status: "queued",
       execute_at: now,

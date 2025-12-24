@@ -1,4 +1,7 @@
 import React, { useMemo, useState } from 'react';
+import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
   ArrowLeft,
   Plus,
@@ -94,13 +97,18 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
   const [panelTab, setPanelTab] = useState<'elements' | 'styles'>('elements');
   const [isTestSendOpen, setIsTestSendOpen] = useState(false);
   const [testEmail, setTestEmail] = useState('test@example.com');
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [dragOverId, setDragOverId] = useState<string | null>(null);
-  const [dragOverPos, setDragOverPos] = useState<'before' | 'after' | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const blocks = useMemo(() => (campaign.emailBlocks && campaign.emailBlocks.length > 0 ? campaign.emailBlocks : defaultBlocks(campaign.name)), [campaign.emailBlocks, campaign.name]);
   const selected = useMemo(() => blocks.find(b => b.id === selectedBlockId) ?? null, [blocks, selectedBlockId]);
   const style = campaign.emailStyle ?? DEFAULT_STYLE;
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      // Avoid hijacking normal clicks; start dragging only after moving a bit.
+      activationConstraint: { distance: 8 },
+    }),
+  );
 
   const ensureBlocks = () => {
     if (campaign.emailBlocks && campaign.emailBlocks.length > 0) return;
@@ -149,33 +157,6 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
     onUpdate({ emailBlocks: next });
   };
 
-  const reorderByDrop = (sourceId: string, targetId: string, pos: 'before' | 'after') => {
-    if (sourceId === targetId) return;
-    const from = blocks.findIndex(b => b.id === sourceId);
-    const to = blocks.findIndex(b => b.id === targetId);
-    if (from < 0 || to < 0) return;
-    const moving = blocks[from];
-    const rest = blocks.filter(b => b.id !== sourceId);
-    const targetIndexInRest = rest.findIndex(b => b.id === targetId);
-    const insertAt = pos === 'before' ? targetIndexInRest : targetIndexInRest + 1;
-    rest.splice(insertAt, 0, moving);
-    onUpdate({ emailBlocks: rest });
-  };
-
-  const setOverFromEvent = (e: React.DragEvent<HTMLDivElement>, id: string) => {
-    const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    const pos: 'before' | 'after' = y < rect.height / 2 ? 'before' : 'after';
-    setDragOverId(id);
-    setDragOverPos(pos);
-  };
-
-  const clearDnd = () => {
-    setDraggingId(null);
-    setDragOverId(null);
-    setDragOverPos(null);
-  };
-
   const onCanvasDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const sourceId = e.dataTransfer.getData('application/x-flowmail-block-id');
@@ -185,7 +166,6 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
     if (paletteLabel) {
       const item = PALETTE.find(p => p.label === paletteLabel);
       if (item) addBlock(item.make());
-      clearDnd();
       return;
     }
     if (sourceId) {
@@ -197,14 +177,27 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
         const next = [...rest, moving];
         onUpdate({ emailBlocks: next });
       }
-      clearDnd();
     }
+  };
+
+  const patchBlock = (id: string, patch: Partial<EmailBlock>) => {
+    const next = blocks.map(b => (b.id === id ? ({ ...b, ...patch } as EmailBlock) : b));
+    onUpdate({ emailBlocks: next });
+  };
+
+  const onDragEnd = (e: DragEndEvent) => {
+    const activeId = String(e.active?.id ?? '');
+    const overId = String(e.over?.id ?? '');
+    if (!activeId || !overId || activeId === overId) return;
+    const oldIndex = blocks.findIndex(b => b.id === activeId);
+    const newIndex = blocks.findIndex(b => b.id === overId);
+    if (oldIndex < 0 || newIndex < 0) return;
+    onUpdate({ emailBlocks: arrayMove(blocks, oldIndex, newIndex) });
   };
 
   const patchSelected = (patch: Partial<EmailBlock>) => {
     if (!selected) return;
-    const next = blocks.map(b => (b.id === selected.id ? ({ ...b, ...patch } as EmailBlock) : b));
-    onUpdate({ emailBlocks: next });
+    patchBlock(selected.id, patch);
   };
 
   const updateStyle = (patch: Partial<EmailStyle>) => {
@@ -221,11 +214,43 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
   };
 
   const renderBlockPreview = (b: EmailBlock) => {
-    if (b.type === 'header') return <div className="text-xl font-bold text-slate-900" style={{ fontFamily: style.secondaryFont || fontFamily }}>{b.text}</div>;
-    if (b.type === 'text') return <div className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{b.text}</div>;
+    const isEditing = editingId === b.id;
+    if (b.type === 'header') {
+      if (isEditing) {
+        return (
+          <input
+            autoFocus
+            value={b.text}
+            onChange={(e) => patchBlock(b.id, { text: e.target.value } as any)}
+            onBlur={() => setEditingId(null)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Escape') setEditingId(null);
+            }}
+            className="w-full bg-white text-slate-900 font-bold outline-none rounded-md border border-sky-200 px-2 py-1"
+            style={{ fontFamily: style.secondaryFont || fontFamily }}
+          />
+        );
+      }
+      return <div className="text-xl font-bold text-slate-900" style={{ fontFamily: style.secondaryFont || fontFamily }}>{b.text}</div>;
+    }
+    if (b.type === 'text') {
+      if (isEditing) {
+        return (
+          <textarea
+            autoFocus
+            value={b.text}
+            onChange={(e) => patchBlock(b.id, { text: e.target.value } as any)}
+            onBlur={() => setEditingId(null)}
+            className="w-full h-32 bg-white text-slate-700 outline-none rounded-md border border-sky-200 px-2 py-1 resize-none"
+          />
+        );
+      }
+      return <div className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">{b.text}</div>;
+    }
     if (b.type === 'button') return (
       <a
         href={b.href}
+        onClick={(e) => e.preventDefault()}
         className="inline-flex items-center justify-center px-4 py-2 rounded-lg text-white text-sm font-semibold"
         style={{ background: style.primaryColor }}
       >
@@ -244,6 +269,7 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
               <a
                 key={it.id}
                 href={it.url || '#'}
+                onClick={(e) => e.preventDefault()}
                 className="block rounded-lg border border-slate-200 overflow-hidden hover:shadow-sm transition-shadow bg-white"
               >
                 {it.imageUrl ? (
@@ -278,6 +304,7 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
             <a
               key={it.id}
               href={it.url}
+              onClick={(e) => e.preventDefault()}
               className="w-9 h-9 rounded-full border border-slate-200 bg-white flex items-center justify-center text-slate-700 hover:bg-slate-50 transition-colors"
               title={it.network}
             >
@@ -291,6 +318,55 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
       );
     }
     return <div className="w-full h-px bg-slate-200" />;
+  };
+
+  const SortableBlock: React.FC<{ b: EmailBlock }> = ({ b }) => {
+    const isSelected = b.id === selectedBlockId;
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: b.id });
+    const styleObj: React.CSSProperties = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+    };
+    return (
+      <div
+        ref={setNodeRef}
+        style={styleObj}
+        {...attributes}
+        {...listeners}
+        onClick={() => setSelectedBlockId(b.id)}
+        onDoubleClick={() => {
+          if (b.type === 'header' || b.type === 'text') {
+            setSelectedBlockId(b.id);
+            setEditingId(b.id);
+          }
+        }}
+        className={`group relative rounded-lg border transition-colors p-3 cursor-grab active:cursor-grabbing select-none ${
+          isSelected ? 'border-sky-300 bg-sky-50/30' : 'border-slate-200 hover:bg-slate-50'
+        } ${isDragging ? 'opacity-70 ring-2 ring-sky-200' : ''}`}
+      >
+        <div className="absolute left-2 top-1/2 -translate-y-1/2 opacity-60 group-hover:opacity-100 transition-opacity">
+          <div className="p-1 rounded-md hover:bg-slate-200 text-slate-500 icon-inherit" title="Drag to reorder">
+            <GripVertical className="app-icon w-4 h-4" />
+          </div>
+        </div>
+
+        <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+          <button onClick={(e) => { e.stopPropagation(); move(b.id, -1); }} className="p-1.5 rounded-md hover:bg-slate-200 text-slate-600 icon-inherit" title="Move up">
+            <ChevronUp className="app-icon w-4 h-4" />
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); move(b.id, 1); }} className="p-1.5 rounded-md hover:bg-slate-200 text-slate-600 icon-inherit" title="Move down">
+            <ChevronDown className="app-icon w-4 h-4" />
+          </button>
+          <button onClick={(e) => { e.stopPropagation(); deleteBlock(b.id); }} className="p-1.5 rounded-md hover:bg-red-100 text-slate-600 hover:text-red-700 icon-inherit" title="Delete">
+            <Trash2 className="app-icon w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="pl-6 pointer-events-none">
+          {renderBlockPreview(b)}
+        </div>
+      </div>
+    );
   };
 
   const renderBrandStyles = () => {
@@ -606,81 +682,13 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
                 />
               </div>
               <div className="p-5 space-y-4">
-                {blocks.map((b) => {
-                  const isSelected = b.id === selectedBlockId;
-                  const isDragging = draggingId === b.id;
-                  const isOver = dragOverId === b.id && !!dragOverPos && draggingId && draggingId !== b.id;
-                  return (
-                    <div
-                      key={b.id}
-                      onClick={() => setSelectedBlockId(b.id)}
-                      draggable
-                      onDragStart={(e) => {
-                        setDraggingId(b.id);
-                        e.dataTransfer.setData('application/x-flowmail-block-id', b.id);
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                      onDragEnd={() => clearDnd()}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        setOverFromEvent(e, b.id);
-                        e.dataTransfer.dropEffect = 'move';
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        const sourceId = e.dataTransfer.getData('application/x-flowmail-block-id');
-                        const paletteLabel = e.dataTransfer.getData('application/x-flowmail-palette-label');
-                        if (paletteLabel) {
-                          const item = PALETTE.find(p => p.label === paletteLabel);
-                          if (item && dragOverPos) {
-                            const targetIndex = blocks.findIndex(x => x.id === b.id);
-                            const insertAt = dragOverPos === 'before' ? targetIndex : targetIndex + 1;
-                            insertBlockAt(item.make(), insertAt);
-                          } else if (item) {
-                            addBlock(item.make());
-                          }
-                          clearDnd();
-                          return;
-                        }
-                        if (sourceId && dragOverPos) {
-                          reorderByDrop(sourceId, b.id, dragOverPos);
-                        }
-                        clearDnd();
-                      }}
-                      className={`group relative rounded-lg border transition-colors p-3 cursor-pointer ${
-                        isSelected ? 'border-sky-300 bg-sky-50/30' : 'border-slate-200 hover:bg-slate-50'
-                      } ${isDragging ? 'opacity-60' : ''}`}
-                    >
-                      {isOver && dragOverPos === 'before' && (
-                        <div className="absolute -top-2 left-0 right-0 h-0.5 bg-sky-500 rounded-full" />
-                      )}
-                      {isOver && dragOverPos === 'after' && (
-                        <div className="absolute -bottom-2 left-0 right-0 h-0.5 bg-sky-500 rounded-full" />
-                      )}
-
-                      <div className="absolute left-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="p-1 rounded-md hover:bg-slate-200 text-slate-500 cursor-grab active:cursor-grabbing icon-inherit" title="Drag to reorder">
-                          <GripVertical className="app-icon w-4 h-4" />
-                        </div>
-                      </div>
-
-                      <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                        <button onClick={(e) => { e.stopPropagation(); move(b.id, -1); }} className="p-1.5 rounded-md hover:bg-slate-200 text-slate-600 icon-inherit" title="Move up">
-                          <ChevronUp className="app-icon w-4 h-4" />
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); move(b.id, 1); }} className="p-1.5 rounded-md hover:bg-slate-200 text-slate-600 icon-inherit" title="Move down">
-                          <ChevronDown className="app-icon w-4 h-4" />
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); deleteBlock(b.id); }} className="p-1.5 rounded-md hover:bg-red-100 text-slate-600 hover:text-red-700 icon-inherit" title="Delete">
-                          <Trash2 className="app-icon w-4 h-4" />
-                        </button>
-                      </div>
-                      <div className="pl-6">
-                        {renderBlockPreview(b)}
-                      </div>
-                    </div>
-                  );
-                })}
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+                  <SortableContext items={blocks.map((b) => b.id)} strategy={verticalListSortingStrategy}>
+                    {blocks.map((b) => (
+                      <SortableBlock key={b.id} b={b} />
+                    ))}
+                  </SortableContext>
+                </DndContext>
               </div>
               <div className="px-5 py-4 border-t border-slate-100 text-xs text-slate-500 flex justify-between">
                 <span>Unsubscribe</span>
@@ -742,6 +750,15 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
             {panelTab === 'styles' && (
               <>
                 {renderBrandStyles()}
+                <div className="pt-4 border-t border-slate-100">
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Selected Block</div>
+                  {renderSettings()}
+                </div>
+              </>
+            )}
+
+            {panelTab === 'elements' && (
+              <>
                 <div className="pt-4 border-t border-slate-100">
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Selected Block</div>
                   {renderSettings()}

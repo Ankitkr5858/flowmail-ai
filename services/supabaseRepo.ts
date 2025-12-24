@@ -22,6 +22,14 @@ export type SupabaseRepo = {
 
 type Table = 'contacts' | 'campaigns' | 'automations';
 
+function shouldSeedDemoData(): boolean {
+  // Default OFF for production. Turn on explicitly in dev if you want sample data.
+  const v = String((import.meta as any)?.env?.VITE_SEED_DEMO_DATA ?? (process as any)?.env?.VITE_SEED_DEMO_DATA ?? '')
+    .trim()
+    .toLowerCase();
+  return v === 'true' || v === '1' || v === 'yes';
+}
+
 function throwIfError(res: { error: any }, ctx: string) {
   if (res.error) {
     const msg = typeof res.error?.message === 'string' ? res.error.message : String(res.error);
@@ -187,6 +195,7 @@ export function createSupabaseRepo(sb: SupabaseClient, workspaceId: string): Sup
   }
 
   async function ensureSeedData() {
+    if (!shouldSeedDemoData()) return;
     const [c1, c2, c3] = await Promise.all([count('contacts'), count('campaigns'), count('automations')]);
     if (c1 > 0 || c2 > 0 || c3 > 0) return;
     const seed = createSeedState();

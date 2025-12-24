@@ -71,10 +71,56 @@ function escapeHtml(s: string) {
     .replaceAll("'", "&#039;");
 }
 
+function applyVars(s: string, vars: Record<string, string>) {
+  let out = s ?? "";
+  for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{{${k}}}`, v);
+  return out;
+}
+
 function renderSimpleEmail(body: string, vars: Record<string, string>) {
   let out = body ?? "";
   for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{{${k}}}`, v);
   return `<div style="font-family: Inter, Arial, sans-serif; font-size: 14px; line-height: 1.55; color: #0f172a; white-space: pre-wrap;">${escapeHtml(out)}</div>`;
+}
+
+function blocksToHtml(
+  blocks: any[] | null | undefined,
+  vars: Record<string, string>,
+  fallbackBody: string | undefined,
+  trackingBase: string | null,
+  sid: string,
+) {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    return `<div style="font-family: Inter, Arial, sans-serif; font-size: 14px; line-height: 1.55; color: #0f172a;">
+      ${escapeHtml(applyVars(fallbackBody ?? "", vars)).replaceAll("\n", "<br/>")}
+    </div>`;
+  }
+  const parts: string[] = [];
+  for (const b of blocks) {
+    if (!b || typeof b !== "object") continue;
+    if (b.type === "header") parts.push(`<h1 style="margin: 0 0 12px; font-size: 22px;">${escapeHtml(applyVars(String(b.text ?? ""), vars))}</h1>`);
+    else if (b.type === "text") parts.push(`<p style="margin: 0 0 12px; white-space: pre-wrap;">${escapeHtml(applyVars(String(b.text ?? ""), vars))}</p>`);
+    else if (b.type === "button") {
+      const href = String(b.href ?? "#");
+      const bid = String(b.id ?? "").trim();
+      const trackedHref =
+        trackingBase && href && href.startsWith("http")
+          ? `${trackingBase.replace(/\/$/, "")}/track/click?sid=${encodeURIComponent(sid)}&bid=${encodeURIComponent(bid || "btn")}&url=${encodeURIComponent(href)}`
+          : href;
+      parts.push(`<p style="margin: 16px 0;">
+        <a href="${escapeHtml(trackedHref)}" style="display:inline-block;background:#0284c7;color:#fff;text-decoration:none;padding:10px 14px;border-radius:10px;font-weight:700;">
+          ${escapeHtml(applyVars(String(b.text ?? "Learn more"), vars))}
+        </a>
+      </p>`);
+    } else if (b.type === "divider") {
+      parts.push(`<hr style="border:0;border-top:1px solid #e2e8f0;margin:18px 0;" />`);
+    } else if (b.type === "image") {
+      parts.push(`<p style="margin: 14px 0;"><img src="${escapeHtml(String(b.src ?? ""))}" alt="${escapeHtml(String(b.alt ?? ""))}" style="max-width:100%;border-radius:12px;border:1px solid #e2e8f0;" /></p>`);
+    } else {
+      // Unknown block types: ignore
+    }
+  }
+  return `<div style="font-family: Inter, Arial, sans-serif; font-size: 14px; line-height: 1.55; color: #0f172a;">${parts.join("")}</div>`;
 }
 
 function rewriteLinks(html: string, base: string, sid: string): string {
@@ -82,6 +128,8 @@ function rewriteLinks(html: string, base: string, sid: string): string {
   // Replace href="https://..." with tracking redirect.
   return html.replace(/href="(https?:\/\/[^"]+)"/g, (_m, url) => {
     const u = String(url);
+    // Don't double-wrap links we already generated for tracking (includes bid)
+    if (u.includes("/track/click?sid=")) return `href="${u}"`;
     const tracked = `${base.replace(/\/$/, "")}/track/click?sid=${encodeURIComponent(sid)}&url=${encodeURIComponent(u)}`;
     return `href="${tracked}"`;
   });
@@ -126,7 +174,7 @@ Deno.serve(async (req) => {
     const nowIso = new Date().toISOString();
 
     const rows = await dbFetch(
-      `email_sends?select=id,campaign_id,contact_id,to_email,subject,meta&workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.queued&execute_at=lte.${encodeURIComponent(nowIso)}&order=execute_at.asc&limit=${batch}`,
+      `email_sends?select=id,campaign_id,contact_id,to_email,from_email,subject,meta&workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.queued&execute_at=lte.${encodeURIComponent(nowIso)}&order=execute_at.asc&limit=${batch}`,
       { method: "GET" },
     );
     const items = Array.isArray(rows) ? rows : [];
@@ -144,6 +192,8 @@ Deno.serve(async (req) => {
     for (const it of items) {
       const id = String(it.id);
       const to = String(it.to_email ?? "").trim();
+      const defaultFromEmail = (Deno.env.get("DEFAULT_FROM_EMAIL") ?? "").trim();
+      const fromEmail = String(it.from_email ?? "").trim() || defaultFromEmail || null;
       const campaignId = String(it.campaign_id ?? "").trim();
       const contactId = it.contact_id ? String(it.contact_id) : null;
 
@@ -173,7 +223,12 @@ Deno.serve(async (req) => {
           lastName = String(c?.last_name ?? "").trim();
         }
 
-        let html = renderSimpleEmail(bodyText, { firstName, lastName, email: to });
+        const vars = { firstName, lastName, email: to };
+        const blocks = campaign?.email_blocks;
+        const trackingBase = functionBase ? functionBase.replace(/\/$/, "") : null;
+        let html = Array.isArray(blocks) && blocks.length > 0
+          ? blocksToHtml(blocks, vars, bodyText, trackingBase, id)
+          : renderSimpleEmail(bodyText, vars);
         // Tracking pixel + click redirect (if configured)
         if (functionBase) {
           const base = functionBase.replace(/\/$/, "");
@@ -197,6 +252,7 @@ Deno.serve(async (req) => {
           body: JSON.stringify({
             provider: "smtp",
             provider_message_id: providerId || null,
+            from_email: fromEmail,
             status: "sent",
             sent_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),

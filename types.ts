@@ -151,11 +151,16 @@ export interface AutomationStep {
 }
 
 export interface WorkspaceSettings {
+  // Profile (stored in auth user metadata in production; kept here for legacy seed UI)
   firstName: string;
   lastName: string;
   email: string;
+
+  // Workspace
   companyName: string;
   timezone: string;
+  defaultFromEmail?: string;
+  teamNotifyEmail?: string;
 }
 
 export enum ViewState {

@@ -212,6 +212,8 @@ export function createSeedState(): SeedState {
     email: 'admin@flowmail.com',
     companyName: 'FlowMail Inc.',
     timezone: '(GMT-08:00) Pacific Time',
+    defaultFromEmail: 'jimmy@peremis.com',
+    teamNotifyEmail: 'jimmy@peremis.com',
   };
 
   const ui: UiState = {

@@ -107,6 +107,117 @@ create table if not exists public.automations (
   primary key (workspace_id, id)
 );
 
+-- Workspace settings (real Settings screen)
+create table if not exists public.workspace_settings (
+  workspace_id text not null default 'default',
+  company_name text,
+  timezone text,
+  default_from_email text,
+  team_notify_email text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (workspace_id)
+);
+
+-- If the table existed from an older schema, add missing columns safely.
+alter table public.workspace_settings add column if not exists company_name text;
+alter table public.workspace_settings add column if not exists timezone text;
+alter table public.workspace_settings add column if not exists default_from_email text;
+alter table public.workspace_settings add column if not exists team_notify_email text;
+
+alter table public.workspace_settings enable row level security;
+
+do $$
+begin
+  -- Authenticated users can read/write workspace settings (single-tenant).
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='workspace_settings' and policyname='workspace_settings_read') then
+    execute 'create policy workspace_settings_read on public.workspace_settings for select to authenticated using (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='workspace_settings' and policyname='workspace_settings_write') then
+    execute 'create policy workspace_settings_write on public.workspace_settings for insert to authenticated with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='workspace_settings' and policyname='workspace_settings_update') then
+    execute 'create policy workspace_settings_update on public.workspace_settings for update to authenticated using (true) with check (true)';
+  end if;
+end $$;
+
+-- ---- Core table RLS policies (single-tenant) ----
+-- These policies allow authenticated users to read/write app data.
+-- Service role (Edge Functions) bypasses RLS automatically.
+
+alter table public.contacts enable row level security;
+alter table public.campaigns enable row level security;
+alter table public.automations enable row level security;
+alter table public.contact_events enable row level security;
+alter table public.email_sends enable row level security;
+
+do $$
+begin
+  -- contacts
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_read') then
+    execute 'create policy contacts_read on public.contacts for select to authenticated using (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_write') then
+    execute 'create policy contacts_write on public.contacts for insert to authenticated with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_update') then
+    execute 'create policy contacts_update on public.contacts for update to authenticated using (true) with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_delete') then
+    execute 'create policy contacts_delete on public.contacts for delete to authenticated using (true)';
+  end if;
+
+  -- campaigns
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_read') then
+    execute 'create policy campaigns_read on public.campaigns for select to authenticated using (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_write') then
+    execute 'create policy campaigns_write on public.campaigns for insert to authenticated with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_update') then
+    execute 'create policy campaigns_update on public.campaigns for update to authenticated using (true) with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_delete') then
+    execute 'create policy campaigns_delete on public.campaigns for delete to authenticated using (true)';
+  end if;
+
+  -- automations
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_read') then
+    execute 'create policy automations_read on public.automations for select to authenticated using (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_write') then
+    execute 'create policy automations_write on public.automations for insert to authenticated with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_update') then
+    execute 'create policy automations_update on public.automations for update to authenticated using (true) with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_delete') then
+    execute 'create policy automations_delete on public.automations for delete to authenticated using (true)';
+  end if;
+
+  -- contact_events
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contact_events' and policyname='contact_events_read') then
+    execute 'create policy contact_events_read on public.contact_events for select to authenticated using (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contact_events' and policyname='contact_events_write') then
+    execute 'create policy contact_events_write on public.contact_events for insert to authenticated with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='contact_events' and policyname='contact_events_update') then
+    execute 'create policy contact_events_update on public.contact_events for update to authenticated using (true) with check (true)';
+  end if;
+
+  -- email_sends
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='email_sends' and policyname='email_sends_read') then
+    execute 'create policy email_sends_read on public.email_sends for select to authenticated using (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='email_sends' and policyname='email_sends_write') then
+    execute 'create policy email_sends_write on public.email_sends for insert to authenticated with check (true)';
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='email_sends' and policyname='email_sends_update') then
+    execute 'create policy email_sends_update on public.email_sends for update to authenticated using (true) with check (true)';
+  end if;
+end $$;
+
 create index if not exists contacts_email_idx on public.contacts (workspace_id, email);
 create index if not exists contacts_lifecycle_idx on public.contacts (workspace_id, lifecycle_stage);
 create index if not exists contacts_temperature_idx on public.contacts (workspace_id, temperature);

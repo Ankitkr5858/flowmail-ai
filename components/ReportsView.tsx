@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarDays, Filter, BarChart3, Mail, Eye, MousePointer, UserMinus, ShieldAlert, Ban } from 'lucide-react';
+import { CalendarDays, Filter, Mail, Eye, MousePointer, UserMinus, ShieldAlert, Ban, Link as LinkIcon } from 'lucide-react';
 import { useAppStore } from '../store/AppStore';
 import AnalyticsView from './AnalyticsView';
 import type { ChartData } from '../types';
@@ -7,12 +7,31 @@ import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import type { DateRangePreset } from '../store/AppStore';
 import { Select } from './ui/Select';
+import { getSupabase } from '../services/supabase';
 
 const ReportsView: React.FC = () => {
   const { state, actions } = useAppStore();
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('all');
   const dateRangePreset: DateRangePreset = state.ui?.dateRangePreset ?? '30d';
   const [segment, setSegment] = useState<'All' | 'Warm Leads' | 'Cold Leads' | 'Customers'>('All');
+  const [recipientRows, setRecipientRows] = useState<Array<{ to_email: string; status: string; sent_at: string | null }>>([]);
+  const [recipientsLoading, setRecipientsLoading] = useState(false);
+  const [recipientsError, setRecipientsError] = useState<string | null>(null);
+  const [reportChartData, setReportChartData] = useState<ChartData[]>([]);
+  const [kpi, setKpi] = useState<{ delivered: number; opens: number; clicks: number; openRate: number; clickRate: number; unsub: number; spam: number; bounces: number }>({
+    delivered: 0,
+    opens: 0,
+    clicks: 0,
+    openRate: 0,
+    clickRate: 0,
+    unsub: 0,
+    spam: 0,
+    bounces: 0,
+  });
+  const [topLinks, setTopLinks] = useState<Array<{ url: string; clicks: number }>>([]);
+  const [blockHeatmap, setBlockHeatmap] = useState<Array<{ bid: string; label: string; clicks: number; url?: string }>>([]);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
   const campaignOptions = useMemo(() => state.campaigns, [state.campaigns]);
 
@@ -37,110 +56,249 @@ const ReportsView: React.FC = () => {
       // ignore
     }
   }, [selectedCampaignId]);
+
+  // Real recipient list per campaign (from public.email_sends)
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (selectedCampaignId === 'all') {
+        setRecipientRows([]);
+        setRecipientsError(null);
+        setRecipientsLoading(false);
+        return;
+      }
+      try {
+        setRecipientsLoading(true);
+        setRecipientsError(null);
+        const supabase = getSupabase();
+        if (!supabase) throw new Error('Supabase not configured');
+        const { data, error } = await supabase
+          .from('email_sends')
+          .select('to_email,status,sent_at')
+          .eq('workspace_id', 'default')
+          .eq('campaign_id', selectedCampaignId)
+          .order('created_at', { ascending: false })
+          .limit(200);
+        if (cancelled) return;
+        if (error) throw error;
+        setRecipientRows((data as any[])?.map((r) => ({
+          to_email: String(r.to_email ?? ''),
+          status: String(r.status ?? ''),
+          sent_at: r.sent_at ? String(r.sent_at) : null,
+        })) ?? []);
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        setRecipientsError(msg);
+        setRecipientRows([]);
+      } finally {
+        if (!cancelled) setRecipientsLoading(false);
+      }
+    };
+    void run();
+    return () => { cancelled = true; };
+  }, [selectedCampaignId]);
   const chartData: ChartData[] = useMemo(() => {
-    if (selectedCampaignId === 'all') return state.chartData;
-    const campaign = state.campaigns.find(c => c.id === selectedCampaignId);
-    if (!campaign) return state.chartData;
-
-    // Build a tiny deterministic series for this campaign so filtering feels real
-    const baseSent = campaign.sentCount ?? 0;
-    const baseOpens = campaign.openCount ?? 0;
-    const baseClicks = campaign.clickCount ?? 0;
-    const baseConv = campaign.conversionCount ?? 0;
-    const safe = (n: number) => (Number.isFinite(n) ? n : 0);
-
-    const points = [
-      { name: 'Week 1', k: 0.78 },
-      { name: 'Week 2', k: 0.92 },
-      { name: 'Week 3', k: 1.05 },
-      { name: 'Week 4', k: 1.00 },
-    ];
-
-    return points.map(p => ({
-      name: p.name,
-      opens: Math.round(safe(baseOpens) * p.k) || Math.round(safe(baseSent) * 0.22 * p.k),
-      clicks: Math.round(safe(baseClicks) * p.k) || Math.round(safe(baseSent) * 0.04 * p.k),
-      conversions: Math.round(safe(baseConv) * p.k) || Math.round(safe(baseSent) * 0.01 * p.k),
-    }));
-  }, [state.chartData, state.campaigns, selectedCampaignId]);
+    return selectedCampaignId === 'all' ? state.chartData : reportChartData;
+  }, [selectedCampaignId, reportChartData, state.chartData]);
 
   const summary = useMemo(() => {
-    if (selectedCampaignId === 'all') {
-      const sentCampaigns = state.campaigns.filter(c => c.status === 'Sent' || c.status === 'Active');
-      const totalSent = sentCampaigns.reduce((sum, c) => sum + (c.sentCount ?? 0), 0);
-      const totalClicks = sentCampaigns.reduce((sum, c) => sum + (c.clickCount ?? 0), 0);
-      const avgClickRate = totalSent > 0 ? totalClicks / totalSent : 0;
-      const subscriberGrowth = Math.round(state.contacts.length * 0.03);
-      return {
-        totalSent,
-        totalSentDeltaPct: 0.09,
-        avgClickRate,
-        avgClickDeltaPct: 0.002,
-        subscriberGrowth,
-        subscriberGrowthDeltaPct: 0.041,
-      };
-    }
-
-    const campaign = state.campaigns.find(c => c.id === selectedCampaignId);
-    const totalSent = campaign?.sentCount ?? 0;
-    const totalClicks = campaign?.clickCount ?? 0;
-    const avgClickRate = totalSent > 0 ? totalClicks / totalSent : 0;
-    const subscriberGrowth = Math.round((campaign?.openCount ?? 0) * 0.04);
     return {
-      totalSent,
-      totalSentDeltaPct: 0.12,
-      avgClickRate,
-      avgClickDeltaPct: -0.004,
-      subscriberGrowth,
-      subscriberGrowthDeltaPct: 0.018,
+      totalSent: kpi.delivered,
+      totalSentDeltaPct: 0,
+      avgClickRate: kpi.clickRate,
+      avgClickDeltaPct: 0,
+      subscriberGrowth: 0,
+      subscriberGrowthDeltaPct: 0,
     };
-  }, [selectedCampaignId, state.campaigns, state.contacts.length]);
+  }, [kpi]);
 
-  const kpis = useMemo(() => {
-    const delivered = summary.totalSent;
-    const openRate = (() => {
-      if (selectedCampaignId === 'all') {
-        const sentCampaigns = state.campaigns.filter(c => c.status === 'Sent' || c.status === 'Active');
-        const sent = sentCampaigns.reduce((sum, c) => sum + (c.sentCount ?? 0), 0);
-        const opens = sentCampaigns.reduce((sum, c) => sum + (c.openCount ?? 0), 0);
-        return sent > 0 ? opens / sent : 0;
+  const kpis = useMemo(() => kpi, [kpi]);
+
+  const startDate = useMemo(() => {
+    const now = new Date();
+    if (dateRangePreset === 'ytd') return new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+    const days = dateRangePreset === '90d' ? 90 : 30;
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - (days - 1));
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }, [dateRangePreset]);
+
+  const buildBuckets = (preset: DateRangePreset) => {
+    const now = new Date();
+    const end = new Date(now);
+    end.setUTCHours(23, 59, 59, 999);
+    if (preset === 'ytd') {
+      const buckets: Array<{ start: Date; end: Date; label: string }> = [];
+      const cur = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+      cur.setUTCDate(1);
+      while (cur <= end) {
+        const s = new Date(cur);
+        const e = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+        buckets.push({ start: s, end: e, label: s.toLocaleDateString('en-US', { month: 'short' }) });
+        cur.setUTCMonth(cur.getUTCMonth() + 1);
       }
-      const c = state.campaigns.find(x => x.id === selectedCampaignId);
-      const sent = c?.sentCount ?? 0;
-      const opens = c?.openCount ?? 0;
-      return sent > 0 ? opens / sent : 0;
-    })();
-    const clickRate = summary.avgClickRate;
+      return buckets.slice(-12);
+    }
+    if (preset === '90d') {
+      const buckets: Array<{ start: Date; end: Date; label: string }> = [];
+      const cur = new Date(startDate);
+      while (cur <= end) {
+        const s = new Date(cur);
+        const e = new Date(cur);
+        e.setUTCDate(e.getUTCDate() + 6);
+        e.setUTCHours(23, 59, 59, 999);
+        buckets.push({ start: s, end: e, label: s.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }) });
+        cur.setUTCDate(cur.getUTCDate() + 7);
+      }
+      return buckets;
+    }
+    const buckets: Array<{ start: Date; end: Date; label: string }> = [];
+    const cur = new Date(startDate);
+    while (cur <= end) {
+      const s = new Date(cur);
+      const e = new Date(cur);
+      e.setUTCHours(23, 59, 59, 999);
+      buckets.push({ start: s, end: e, label: s.toLocaleDateString('en-US', { month: 'short', day: '2-digit' }) });
+      cur.setUTCDate(cur.getUTCDate() + 1);
+    }
+    return buckets;
+  };
 
-    // pseudo metrics (until we have real event logs)
-    const unsub = Math.max(0, Math.round(delivered * 0.006));
-    const spam = Math.max(0, Math.round(delivered * 0.001));
-    const bounces = Math.max(0, Math.round(delivered * 0.012));
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        setAnalyticsLoading(true);
+        setAnalyticsError(null);
+        const sb = getSupabase();
+        if (!sb) throw new Error('Supabase not configured');
 
-    return {
-      delivered,
-      openRate,
-      clickRate,
-      unsub,
-      spam,
-      bounces,
+        const ws = 'default';
+        const startIso = startDate.toISOString();
+        const endIso = new Date().toISOString();
+        const buckets = buildBuckets(dateRangePreset);
+
+        const base = sb
+          .from('email_sends')
+          .select('sent_at,opened_at,clicked_at,created_at')
+          .eq('workspace_id', ws)
+          .gte('created_at', startIso)
+          .limit(10000);
+        const q = selectedCampaignId === 'all' ? base : base.eq('campaign_id', selectedCampaignId);
+        const { data: rows, error } = await q;
+        if (error) throw error;
+        if (cancelled) return;
+
+        const sent = (rows ?? []).filter((r: any) => Boolean(r.sent_at)).length;
+        const opens = (rows ?? []).filter((r: any) => Boolean(r.opened_at)).length;
+        const clicks = (rows ?? []).filter((r: any) => Boolean(r.clicked_at)).length;
+
+        const { data: unsubRows, error: unsubErr } = await sb
+          .from('contact_events')
+          .select('id')
+          .eq('workspace_id', ws)
+          .eq('event_type', 'unsubscribed')
+          .gte('occurred_at', startIso)
+          .lte('occurred_at', endIso)
+          .limit(10000);
+        if (unsubErr) throw unsubErr;
+
+        const inBucket = (ts: string | null, b: { start: Date; end: Date }) => {
+          if (!ts) return false;
+          const d = new Date(ts);
+          return d >= b.start && d <= b.end;
+        };
+        const series: ChartData[] = buckets.map((b) => ({
+          name: b.label,
+          opens: (rows ?? []).filter((r: any) => inBucket(r.opened_at, b)).length,
+          clicks: (rows ?? []).filter((r: any) => inBucket(r.clicked_at, b)).length,
+          conversions: 0,
+        }));
+        setReportChartData(series);
+
+        setKpi({
+          delivered: sent,
+          opens,
+          clicks,
+          openRate: sent > 0 ? opens / sent : 0,
+          clickRate: sent > 0 ? clicks / sent : 0,
+          unsub: Array.isArray(unsubRows) ? unsubRows.length : 0,
+          spam: 0,
+          bounces: 0,
+        });
+
+        const evBase = sb
+          .from('contact_events')
+          .select('meta,campaign_id,occurred_at')
+          .eq('workspace_id', ws)
+          .eq('event_type', 'link_click')
+          .gte('occurred_at', startIso)
+          .lte('occurred_at', endIso)
+          .limit(10000);
+        const evQ = selectedCampaignId === 'all' ? evBase : evBase.eq('campaign_id', selectedCampaignId);
+        const { data: evRows, error: evErr } = await evQ;
+        if (evErr) throw evErr;
+        if (cancelled) return;
+        const counts = new Map<string, number>();
+        const bidCounts = new Map<string, number>();
+        const bidUrl = new Map<string, string>();
+        (evRows ?? []).forEach((r: any) => {
+          const url = String(r?.meta?.url ?? '').trim();
+          const bid = String(r?.meta?.bid ?? '').trim();
+          if (!url) return;
+          counts.set(url, (counts.get(url) ?? 0) + 1);
+          if (bid) {
+            bidCounts.set(bid, (bidCounts.get(bid) ?? 0) + 1);
+            if (!bidUrl.has(bid)) bidUrl.set(bid, url);
+          }
+        });
+        const top = Array.from(counts.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 10)
+          .map(([url, clicks]) => ({ url, clicks }));
+        setTopLinks(top);
+
+        // Block heatmap (real clicks per email block id). Only meaningful when a single campaign is selected.
+        if (selectedCampaignId !== 'all' && selectedCampaign?.emailBlocks && Array.isArray((selectedCampaign as any).emailBlocks)) {
+          const blocks = (selectedCampaign as any).emailBlocks as any[];
+          const labeled = blocks
+            .map((b, idx) => {
+              const bid = String(b?.id ?? '').trim();
+              if (!bid) return null;
+              const type = String(b?.type ?? '').trim();
+              const text = String(b?.text ?? '').trim();
+              const href = String(b?.href ?? '').trim();
+              const label = type === 'button'
+                ? (text || 'Button')
+                : type === 'header'
+                  ? (text || 'Header')
+                  : type === 'text'
+                    ? (text ? (text.length > 60 ? `${text.slice(0, 60)}…` : text) : 'Text')
+                    : (type || `Block ${idx + 1}`);
+              const clicks = bidCounts.get(bid) ?? 0;
+              return { bid, label, clicks, url: href || bidUrl.get(bid) };
+            })
+            .filter(Boolean) as Array<{ bid: string; label: string; clicks: number; url?: string }>;
+          setBlockHeatmap(labeled);
+        } else {
+          setBlockHeatmap([]);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setAnalyticsError(e instanceof Error ? e.message : String(e));
+        setReportChartData([]);
+        setTopLinks([]);
+        setBlockHeatmap([]);
+        setKpi({ delivered: 0, opens: 0, clicks: 0, openRate: 0, clickRate: 0, unsub: 0, spam: 0, bounces: 0 });
+      } finally {
+        if (!cancelled) setAnalyticsLoading(false);
+      }
     };
-  }, [selectedCampaignId, state.campaigns, summary]);
-
-  const heatmapSpots = useMemo(() => {
-    // deterministic-ish based on chartSeed
-    const seed = state.ui?.chartSeed ?? 1;
-    const rand = (n: number) => {
-      const x = Math.sin((seed + n) * 999) * 10000;
-      return x - Math.floor(x);
-    };
-    return [
-      { x: 0.64 + rand(1) * 0.06, y: 0.46 + rand(2) * 0.05, r: 0.18 },
-      { x: 0.52 + rand(3) * 0.06, y: 0.66 + rand(4) * 0.05, r: 0.14 },
-      { x: 0.70 + rand(5) * 0.06, y: 0.30 + rand(6) * 0.05, r: 0.12 },
-      { x: 0.32 + rand(7) * 0.06, y: 0.72 + rand(8) * 0.05, r: 0.10 },
-    ];
-  }, [state.ui?.chartSeed]);
+    void run();
+    return () => { cancelled = true; };
+  }, [dateRangePreset, selectedCampaignId, startDate]);
 
   return (
     <div className="space-y-6">
@@ -258,67 +416,164 @@ const ReportsView: React.FC = () => {
             </Card>
           </div>
 
-          {/* Charts + heatmap */}
+          {/* Charts + links */}
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
             <div className="xl:col-span-8">
               <AnalyticsView data={chartData} summary={summary} />
             </div>
             <Card className="xl:col-span-4 p-5">
-              <div className="font-semibold text-slate-900">Click Heatmap</div>
-              <div className="text-xs text-slate-500 mt-1">
-                {selectedCampaign ? `Preview: ${selectedCampaign.name}` : 'Preview: (All campaigns)'}
-              </div>
-
-              <div className="mt-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-900">
-                  Exclusive Deals Inside!
-                </div>
-                <div className="relative p-4 bg-slate-50">
-                  <div className="bg-white border border-slate-200 rounded-lg p-4 text-sm text-slate-700 space-y-3">
-                    <div>
-                      Hi <span className="font-semibold">{'{{firstName}}'}</span>,
-                    </div>
-                    <div>Check out the new collection. We think you’ll love it.</div>
-                    <div className="flex justify-center">
-                      <div className="px-4 py-2 rounded-lg bg-sky-600 text-white font-semibold text-sm">Shop Now</div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="h-16 bg-slate-100 rounded-md border border-slate-200" />
-                      <div className="h-16 bg-slate-100 rounded-md border border-slate-200" />
-                      <div className="h-16 bg-slate-100 rounded-md border border-slate-200" />
-                    </div>
-                    <div className="text-xs text-slate-500 text-center pt-2 border-t border-slate-100">Unsubscribe</div>
-                  </div>
-
-                  {/* heatmap overlay */}
-                  <div className="absolute inset-4 pointer-events-none">
-                    {heatmapSpots.map((s, idx) => (
-                      <div
-                        key={idx}
-                        className="absolute"
-                        style={{
-                          left: `${s.x * 100}%`,
-                          top: `${s.y * 100}%`,
-                          width: `${s.r * 100}%`,
-                          height: `${s.r * 100}%`,
-                          transform: 'translate(-50%, -50%)',
-                          background:
-                            'radial-gradient(circle, rgba(239,68,68,0.55) 0%, rgba(239,68,68,0.22) 35%, rgba(239,68,68,0) 70%)',
-                          borderRadius: '9999px',
-                          filter: 'blur(0.2px)',
-                          mixBlendMode: 'multiply',
-                        }}
-                      />
-                    ))}
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="font-semibold text-slate-900">Top Links</div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Real clicks from <span className="font-mono">contact_events</span>
                   </div>
                 </div>
+                <div className="text-xs text-slate-500">{analyticsLoading ? 'Loading…' : ''}</div>
               </div>
 
-              <div className="mt-3 text-xs text-slate-500">
-                Heatmap is simulated using deterministic hotspots (until we track real click events).
-              </div>
+              {analyticsError && (
+                <div className="mt-3 text-sm text-red-600">Failed to load: {analyticsError}</div>
+              )}
+
+              {!analyticsError && (
+                <div className="mt-4 space-y-2">
+                  {topLinks.length === 0 ? (
+                    <div className="text-sm text-slate-500">No tracked link clicks yet.</div>
+                  ) : (
+                    topLinks.map((l) => (
+                      <div key={l.url} className="flex items-start justify-between gap-3 p-3 rounded-xl border border-slate-200 bg-white">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 text-slate-800 font-medium text-sm">
+                            <LinkIcon className="app-icon w-4 h-4 text-slate-400" />
+                            <span className="truncate">{l.url}</span>
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-sm font-semibold text-slate-900">{l.clicks}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </Card>
           </div>
+
+          {selectedCampaignId !== 'all' && (
+            <Card className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-slate-900">Heatmap (Real Clicks by Email Block)</div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Shows how many clicks each tracked block (button/link) received for this campaign.
+                  </div>
+                </div>
+                <div className="text-xs text-slate-500">{analyticsLoading ? 'Loading…' : ''}</div>
+              </div>
+
+              {analyticsError && (
+                <div className="mt-3 text-sm text-red-600">Failed to load: {analyticsError}</div>
+              )}
+
+              {!analyticsError && (
+                <div className="mt-4 space-y-2">
+                  {blockHeatmap.length === 0 ? (
+                    <div className="text-sm text-slate-500">
+                      No heatmap data yet. This appears after you send a campaign and recipients click a tracked button/link.
+                    </div>
+                  ) : (
+                    (() => {
+                      const max = Math.max(1, ...blockHeatmap.map(x => x.clicks));
+                      const sorted = [...blockHeatmap].sort((a, b) => b.clicks - a.clicks);
+                      return sorted.map((b) => {
+                        const pct = Math.max(0, Math.min(1, b.clicks / max));
+                        return (
+                          <div key={b.bid} className="p-3 rounded-xl border border-slate-200 bg-white">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold text-slate-900 truncate">{b.label}</div>
+                                {b.url ? (
+                                  <div className="mt-1 text-xs text-slate-500 truncate">{b.url}</div>
+                                ) : (
+                                  <div className="mt-1 text-xs text-slate-400 truncate">blockId: {b.bid}</div>
+                                )}
+                              </div>
+                              <div className="shrink-0 text-sm font-semibold text-slate-900">{b.clicks}</div>
+                            </div>
+                            <div className="mt-2 h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-sky-500"
+                                style={{ width: `${Math.round(pct * 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
+
+          {selectedCampaignId !== 'all' && (
+            <Card className="p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-slate-900">Recipients</div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    This list comes from <span className="font-mono">email_sends</span> for the selected campaign.
+                  </div>
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={() => actions.refreshChartData()}
+                >
+                  Refresh
+                </Button>
+              </div>
+
+              <div className="mt-4">
+                {recipientsLoading && <div className="text-sm text-slate-600">Loading recipients…</div>}
+                {!recipientsLoading && recipientsError && (
+                  <div className="text-sm text-red-600">Failed to load recipients: {recipientsError}</div>
+                )}
+                {!recipientsLoading && !recipientsError && (
+                  <>
+                    <div className="text-sm text-slate-700 mb-3">
+                      Showing <span className="font-semibold">{recipientRows.length}</span> most recent recipients (max 200).
+                    </div>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-50 border-b border-slate-200">
+                          <tr>
+                            <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Email</th>
+                            <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                            <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Sent at</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {recipientRows.map((r) => (
+                            <tr key={`${r.to_email}-${r.sent_at ?? ''}`} className="hover:bg-slate-50">
+                              <td className="px-4 py-3 font-medium text-slate-800">{r.to_email}</td>
+                              <td className="px-4 py-3 text-slate-700">{r.status}</td>
+                              <td className="px-4 py-3 text-slate-600">{r.sent_at ? new Date(r.sent_at).toLocaleString() : '-'}</td>
+                            </tr>
+                          ))}
+                          {recipientRows.length === 0 && (
+                            <tr>
+                              <td className="px-4 py-6 text-slate-500" colSpan={3}>
+                                No recipients yet. Send the campaign to populate this list.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </Card>
+          )}
         </div>
       </div>
     </div>

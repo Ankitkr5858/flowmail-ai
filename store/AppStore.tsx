@@ -43,31 +43,116 @@ function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
 }
 
-function seededRand(seed: number): () => number {
-  // Simple LCG for deterministic-ish UI data.
-  let s = seed >>> 0;
-  return () => {
-    s = (1664525 * s + 1013904223) >>> 0;
-    return s / 2 ** 32;
-  };
+function startForPreset(preset: DateRangePreset): Date {
+  const now = new Date();
+  if (preset === 'ytd') return new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+  const days = preset === '90d' ? 90 : 30;
+  const d = new Date(now);
+  d.setUTCDate(d.getUTCDate() - (days - 1));
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
 }
 
-function generateChartData(seed: number, preset: DateRangePreset, base?: ChartData[]): ChartData[] {
-  const rand = seededRand(seed);
-  const scale = preset === '90d' ? 1.12 : preset === 'ytd' ? 1.24 : 1.0;
-  const input = (base && base.length > 0) ? base : createSeedState().chartData;
+function fmtMonth(d: Date): string {
+  return d.toLocaleDateString('en-US', { month: 'short' });
+}
 
-  return input.map((p, idx) => {
-    const jitter = 0.88 + rand() * 0.28; // 0.88 - 1.16
-    const wave = 0.92 + Math.sin((idx + 1) * 0.9) * 0.07;
-    const k = scale * jitter * wave;
-    return {
-      name: p.name,
-      opens: Math.max(0, Math.round(p.opens * k)),
-      clicks: Math.max(0, Math.round(p.clicks * k)),
-      conversions: Math.max(0, Math.round(p.conversions * k)),
-    };
-  });
+function fmtDay(d: Date): string {
+  return d.toLocaleDateString('en-US', { month: 'short', day: '2-digit' });
+}
+
+function buildBuckets(preset: DateRangePreset): Array<{ key: string; start: Date; end: Date; label: string }> {
+  const now = new Date();
+  const end = new Date(now);
+  end.setUTCHours(23, 59, 59, 999);
+
+  if (preset === 'ytd') {
+    const buckets: Array<{ key: string; start: Date; end: Date; label: string }> = [];
+    const start = startForPreset('ytd');
+    const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+    while (cur <= end) {
+      const s = new Date(cur);
+      const e = new Date(Date.UTC(cur.getUTCFullYear(), cur.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+      buckets.push({ key: `${s.getUTCFullYear()}-${s.getUTCMonth()}`, start: s, end: e, label: fmtMonth(s) });
+      cur.setUTCMonth(cur.getUTCMonth() + 1);
+    }
+    return buckets.slice(-12);
+  }
+
+  if (preset === '90d') {
+    const buckets: Array<{ key: string; start: Date; end: Date; label: string }> = [];
+    const start = startForPreset('90d');
+    const cur = new Date(start);
+    while (cur <= end) {
+      const s = new Date(cur);
+      const e = new Date(cur);
+      e.setUTCDate(e.getUTCDate() + 6);
+      e.setUTCHours(23, 59, 59, 999);
+      buckets.push({ key: s.toISOString().slice(0, 10), start: s, end: e, label: fmtDay(s) });
+      cur.setUTCDate(cur.getUTCDate() + 7);
+    }
+    return buckets;
+  }
+
+  // 30d: daily buckets
+  const buckets: Array<{ key: string; start: Date; end: Date; label: string }> = [];
+  const start = startForPreset('30d');
+  const cur = new Date(start);
+  while (cur <= end) {
+    const s = new Date(cur);
+    const e = new Date(cur);
+    e.setUTCHours(23, 59, 59, 999);
+    buckets.push({ key: s.toISOString().slice(0, 10), start: s, end: e, label: fmtDay(s) });
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return buckets;
+}
+
+async function fetchChartDataFromSupabase(preset: DateRangePreset): Promise<ChartData[] | null> {
+  if (!isSupabaseConfigured()) return null;
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data: sess } = await sb.auth.getSession();
+  if (!sess.session) return null;
+
+  const ws = getWorkspaceId() || 'default';
+  const buckets = buildBuckets(preset);
+  const startIso = buckets[0]?.start.toISOString();
+  const endIso = buckets[buckets.length - 1]?.end.toISOString();
+  if (!startIso || !endIso) return null;
+
+  // Pull timestamps for opens/clicks within the range (real tracking via /track function)
+  const [opensRes, clicksRes] = await Promise.all([
+    sb
+      .from('email_sends')
+      .select('opened_at')
+      .eq('workspace_id', ws)
+      .not('opened_at', 'is', null)
+      .gte('opened_at', startIso)
+      .lte('opened_at', endIso)
+      .limit(10000),
+    sb
+      .from('email_sends')
+      .select('clicked_at')
+      .eq('workspace_id', ws)
+      .not('clicked_at', 'is', null)
+      .gte('clicked_at', startIso)
+      .lte('clicked_at', endIso)
+      .limit(10000),
+  ]);
+  if (opensRes.error) throw opensRes.error;
+  if (clicksRes.error) throw clicksRes.error;
+
+  const opens = (opensRes.data ?? []).map((r: any) => new Date(r.opened_at));
+  const clicks = (clicksRes.data ?? []).map((r: any) => new Date(r.clicked_at));
+
+  const inBucket = (d: Date, b: { start: Date; end: Date }) => d >= b.start && d <= b.end;
+  return buckets.map((b) => ({
+    name: b.label,
+    opens: opens.filter((d) => inBucket(d, b)).length,
+    clicks: clicks.filter((d) => inBucket(d, b)).length,
+    conversions: 0,
+  }));
 }
 
 function normalizeLoadedState(s: AppState): AppState {
@@ -129,6 +214,16 @@ async function hydrateFromSupabase(): Promise<void> {
       campaigns: data.campaigns,
       automations: data.automations,
     }));
+    // Replace seeded chart data with real tracking data when available.
+    const preset = getState().ui?.dateRangePreset ?? '30d';
+    const real = await fetchChartDataFromSupabase(preset);
+    if (real) {
+      setState((prev) => ({
+        ...prev,
+        chartData: real,
+        ui: { ...(prev.ui ?? createSeedState().ui), lastRefreshedAt: nowIso() },
+      }));
+    }
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn('[flowmail] Supabase hydrate failed:', e);
@@ -190,20 +285,27 @@ const actions: AppActions = {
   },
 
   refreshChartData: () => {
-    setState((prev) => {
-      const ui = prev.ui ?? createSeedState().ui;
-      const nextSeed = (ui.chartSeed ?? 1) + 1;
-      const preset = ui.dateRangePreset ?? '30d';
-      return {
-        ...prev,
-        chartData: generateChartData(nextSeed, preset, prev.chartData),
-        ui: {
-          ...ui,
-          chartSeed: nextSeed,
-          lastRefreshedAt: nowIso(),
-        },
-      };
-    });
+    // For Supabase-configured sessions, refresh real metrics from DB.
+    const preset = getState().ui?.dateRangePreset ?? '30d';
+    if (isSupabaseConfigured()) {
+      void fetchChartDataFromSupabase(preset)
+        .then((real) => {
+          if (!real) return;
+          setState((prev) => ({
+            ...prev,
+            chartData: real,
+            ui: { ...(prev.ui ?? createSeedState().ui), lastRefreshedAt: nowIso() },
+          }));
+        })
+        .catch((e) => console.warn('[flowmail] chart refresh failed:', e));
+      return;
+    }
+
+    // Local/demo mode: keep existing chart data
+    setState((prev) => ({
+      ...prev,
+      ui: { ...(prev.ui ?? createSeedState().ui), lastRefreshedAt: nowIso() },
+    }));
   },
 
   createCampaign: (patch) => {
@@ -425,26 +527,13 @@ export function computeDashboardMetrics(state: AppState): Metric[] {
   const openRate = totalSent > 0 ? totalOpens / totalSent : 0;
   const clickRate = totalSent > 0 ? totalClicks / totalSent : 0;
 
-  // Small deterministic deltas for UI polish
-  const seed = state.ui?.chartSeed ?? 1;
-  const rand = seededRand(seed);
   const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
-  const delta = () => {
-    const v = (rand() * 0.12) - 0.04; // -4% to +8%
-    const sign = v >= 0 ? '+' : '';
-    return { value: `${sign}${(v * 100).toFixed(1)}%`, trend: v >= 0 ? 'up' as const : 'down' as const };
-  };
-
-  const d1 = delta();
-  const d2 = delta();
-  const d3 = delta();
-  const d4 = delta();
 
   return [
-    { label: 'Subscribers', value: subscribed.toLocaleString(), change: d1.value, trend: d1.trend },
-    { label: 'Campaigns', value: campaigns.length.toLocaleString(), change: d2.value, trend: d2.trend },
-    { label: 'Open Rate', value: pct(openRate), change: d3.value, trend: d3.trend },
-    { label: 'Click Rate', value: pct(clickRate), change: d4.value, trend: d4.trend },
+    { label: 'Subscribers', value: subscribed.toLocaleString(), change: '—', trend: 'up' },
+    { label: 'Campaigns', value: campaigns.length.toLocaleString(), change: '—', trend: 'up' },
+    { label: 'Open Rate', value: pct(openRate), change: '—', trend: 'up' },
+    { label: 'Click Rate', value: pct(clickRate), change: '—', trend: 'up' },
   ];
 }
 

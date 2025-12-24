@@ -175,6 +175,7 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   try {
+    const defaultFromEmail = (Deno.env.get("DEFAULT_FROM_EMAIL") ?? "").trim();
     const body = await req.json().catch(() => ({}));
     const workspaceId = String(body?.workspaceId ?? "default") || "default";
     const limitSchedules = Math.max(1, Math.min(10, Number(body?.limitSchedules ?? 3)));
@@ -229,6 +230,7 @@ Deno.serve(async (req) => {
               campaign_id: campaignId,
               contact_id: r.id || null,
               to_email: r.email,
+              from_email: defaultFromEmail || null,
               subject,
               status: "queued",
               execute_at: nowIso,
