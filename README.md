@@ -67,10 +67,82 @@ Required env vars for the gateway (set in your host environment):
   - `SMTP_USER=...`
   - `SMTP_PASS=...`
 
+### 1b) Production secure (Hostinger VPS): DNS → Nginx (HTTPS) → PM2
+This is the recommended setup so the gateway is only reachable via **HTTPS** and your `MAIL_GATEWAY_TOKEN` is never sent over plain HTTP.
+
+**DNS**
+- Create an `A` record: `smtp` → your VPS IPv4 (example: `93.127.200.46`)
+- Your gateway public URL becomes: `https://smtp.<your-domain>`
+
+**VPS**
+- Install Node + Nginx + Certbot:
+
+```bash
+sudo apt update
+sudo apt install -y nginx certbot python3-certbot-nginx
+```
+
+- Upload this repo to your VPS (example path: `/opt/flowmail-ai`) and install deps:
+
+```bash
+cd /opt/flowmail-ai
+npm ci
+```
+
+- Install PM2 and start the gateway:
+
+```bash
+sudo npm i -g pm2
+pm2 start server/ecosystem.config.cjs --env production
+pm2 save
+pm2 startup
+```
+
+**Nginx reverse proxy**
+- Create an Nginx site (replace `smtp.<your-domain>`):
+
+```bash
+sudo tee /etc/nginx/sites-available/flowmail-smtp-gateway >/dev/null <<'EOF'
+server {
+  listen 80;
+  server_name smtp.<your-domain>;
+
+  location / {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+}
+EOF
+
+sudo ln -sf /etc/nginx/sites-available/flowmail-smtp-gateway /etc/nginx/sites-enabled/flowmail-smtp-gateway
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+**SSL (Let’s Encrypt)**
+
+```bash
+sudo certbot --nginx -d smtp.<your-domain>
+```
+
+**Test**
+
+```bash
+curl -s https://smtp.<your-domain>/health
+```
+
+If it returns `{ "ok": true }`, the gateway is live.
+
 ### 2) Supabase secrets (Edge Functions)
 - `SUPABASE_SERVICE_ROLE_KEY=...`
 - `MAIL_GATEWAY_URL=https://<your-smtp-gateway-host>`
 - `MAIL_GATEWAY_TOKEN=...` (same token as gateway)
+- `PUBLIC_FUNCTIONS_BASE_URL=https://<project-ref>.supabase.co/functions/v1`
+- `UNSUBSCRIBE_SIGNING_KEY=...` (random string)
 - Optional (notify action default recipient):
   - `TEAM_NOTIFY_EMAIL=jimmy@peremis.com`
 
@@ -93,10 +165,8 @@ Deploy:
 
 Secrets (Supabase → Edge Functions → Secrets):
 - `SUPABASE_SERVICE_ROLE_KEY=...`
-- `RESEND_API_KEY=...`
-- `RESEND_FROM="Jimmy <jimmy@peremis.com>"`
 - `UNSUBSCRIBE_SIGNING_KEY=...` (random string)
-- `PUBLIC_FUNCTIONS_BASE_URL=https://<your-project>.functions.supabase.co`
+- `PUBLIC_FUNCTIONS_BASE_URL=https://<project-ref>.supabase.co/functions/v1`
 
 ### 3) Create a schedule row
 In Supabase SQL Editor (example: weekly on Monday 09:00 UTC):
@@ -135,7 +205,7 @@ Deploy:
 - `supabase functions deploy track`
 
 Ensure these secrets are set so emails include tracking + unsubscribe:
-- `PUBLIC_FUNCTIONS_BASE_URL=https://<your-project>.functions.supabase.co`
+- `PUBLIC_FUNCTIONS_BASE_URL=https://<project-ref>.supabase.co/functions/v1`
 - `UNSUBSCRIBE_SIGNING_KEY=...`
 
 ## Cron (Free plan alternative): GitHub Actions scheduler
@@ -173,5 +243,7 @@ Recommended intervals:
 
 ### Secrets
 - `SUPABASE_SERVICE_ROLE_KEY=...`
-- `RESEND_API_KEY=...`
-- `RESEND_FROM="Jimmy <jimmy@peremis.com>"`
+- `MAIL_GATEWAY_URL=...`
+- `MAIL_GATEWAY_TOKEN=...`
+- `PUBLIC_FUNCTIONS_BASE_URL=https://<project-ref>.supabase.co/functions/v1`
+- `UNSUBSCRIBE_SIGNING_KEY=...`
