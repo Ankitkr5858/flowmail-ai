@@ -23,10 +23,11 @@ export default function AutomationRunsModal({
   automationId: string | null;
 }) {
   const [rows, setRows] = useState<RunRow[]>([]);
+  const [contactLabel, setContactLabel] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const ws = getWorkspaceId();
 
-  const title = useMemo(() => (automationId ? `Runs: ${automationId}` : 'Automation Runs'), [automationId]);
+  const title = useMemo(() => ('Automation Runs'), []);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -43,8 +44,27 @@ export default function AutomationRunsModal({
       const res = automationId ? await q.eq('automation_id', automationId) : await q;
       if (!res.error && Array.isArray(res.data)) {
         setRows(res.data as any);
+        const ids = Array.from(new Set((res.data as any[]).map((r) => String(r.contact_id ?? '')).filter(Boolean)));
+        if (ids.length > 0) {
+          const { data: cRows } = await sb
+            .from('contacts')
+            .select('id,first_name,last_name,email')
+            .eq('workspace_id', ws)
+            .in('id', ids.slice(0, 200));
+          const map: Record<string, string> = {};
+          (cRows ?? []).forEach((c: any) => {
+            const fn = String(c?.first_name ?? '').trim();
+            const ln = String(c?.last_name ?? '').trim();
+            const em = String(c?.email ?? '').trim();
+            map[String(c.id)] = [fn, ln].filter(Boolean).join(' ') || em || 'Contact';
+          });
+          setContactLabel(map);
+        } else {
+          setContactLabel({});
+        }
       } else {
         setRows([]);
+        setContactLabel({});
       }
       setLoading(false);
     })();
@@ -58,7 +78,7 @@ export default function AutomationRunsModal({
         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
           <div>
             <div className="font-semibold text-lg text-slate-900">{title}</div>
-            <div className="text-xs text-slate-500">Last 50 runs (for debugging).</div>
+            <div className="text-xs text-slate-500">Latest activity</div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <X className="app-icon w-5 h-5" />
@@ -86,7 +106,7 @@ export default function AutomationRunsModal({
                   {rows.map((r) => (
                     <tr key={r.id}>
                       <td className="px-4 py-3 font-semibold text-slate-900">{r.status}</td>
-                      <td className="px-4 py-3 text-slate-700">{r.contact_id}</td>
+                      <td className="px-4 py-3 text-slate-700">{contactLabel[r.contact_id] ?? 'Contact'}</td>
                       <td className="px-4 py-3 text-slate-700">{r.started_at ? new Date(r.started_at).toLocaleString() : '—'}</td>
                       <td className="px-4 py-3 text-slate-700">{r.finished_at ? new Date(r.finished_at).toLocaleString() : '—'}</td>
                       <td className="px-4 py-3 text-slate-700">{r.last_error ?? '—'}</td>

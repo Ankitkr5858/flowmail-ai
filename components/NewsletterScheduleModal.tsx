@@ -81,7 +81,7 @@ export default function NewsletterScheduleModal({
         <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
           <div>
             <div className="font-semibold text-lg text-slate-900">Schedule Newsletter</div>
-            <div className="text-xs text-slate-500">Creates a recurring schedule for this campaign.</div>
+            <div className="text-xs text-slate-500">Set when this newsletter should go out.</div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <X className="app-icon w-5 h-5" />
@@ -173,7 +173,7 @@ export default function NewsletterScheduleModal({
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-semibold text-slate-900">Recipients (segment)</div>
-                <div className="text-xs text-slate-500">Used by the scheduler to filter contacts.</div>
+                <div className="text-xs text-slate-500">Choose who should receive it.</div>
               </div>
               <button
                 type="button"

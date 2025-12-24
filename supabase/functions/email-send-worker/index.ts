@@ -62,6 +62,23 @@ async function gatewaySend(gatewayUrl: string, token: string, payload: any) {
   return text ? JSON.parse(text) : null;
 }
 
+async function loadWorkspaceSettings(workspaceId: string): Promise<{ companyName: string | null; defaultFromEmail: string | null } | null> {
+  try {
+    const rows = await dbFetch(
+      `workspace_settings?select=company_name,default_from_email&workspace_id=eq.${encodeURIComponent(workspaceId)}&limit=1`,
+      { method: "GET" },
+    );
+    const r = Array.isArray(rows) ? rows[0] : null;
+    if (!r) return null;
+    return {
+      companyName: r.company_name ? String(r.company_name) : null,
+      defaultFromEmail: r.default_from_email ? String(r.default_from_email) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function escapeHtml(s: string) {
   return String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -188,12 +205,17 @@ Deno.serve(async (req) => {
     const campById = new Map<string, any>();
     (Array.isArray(campRows) ? campRows : []).forEach((c: any) => campById.set(String(c.id), c));
 
+    // Settings used for personalization + sender display name
+    const wsSettings = await loadWorkspaceSettings(workspaceId);
+    const companyName = (wsSettings?.companyName ?? "").trim() || null;
+
     let processed = 0;
     for (const it of items) {
       const id = String(it.id);
       const to = String(it.to_email ?? "").trim();
-      const defaultFromEmail = (Deno.env.get("DEFAULT_FROM_EMAIL") ?? "").trim();
-      const fromEmail = String(it.from_email ?? "").trim() || defaultFromEmail || null;
+      const defaultFromEmailSecret = (Deno.env.get("DEFAULT_FROM_EMAIL") ?? "").trim();
+      const defaultFromEmailSetting = (wsSettings?.defaultFromEmail ?? "").trim();
+      const fromEmail = String(it.from_email ?? "").trim() || defaultFromEmailSecret || defaultFromEmailSetting || null;
       const campaignId = String(it.campaign_id ?? "").trim();
       const contactId = it.contact_id ? String(it.contact_id) : null;
 
@@ -223,7 +245,8 @@ Deno.serve(async (req) => {
           lastName = String(c?.last_name ?? "").trim();
         }
 
-        const vars = { firstName, lastName, email: to };
+        const senderName = companyName || (Deno.env.get("DEFAULT_FROM_NAME") ?? "").trim() || "FlowMail";
+        const vars = { firstName, lastName, email: to, companyName: companyName || "", senderName };
         const blocks = campaign?.email_blocks;
         const trackingBase = functionBase ? functionBase.replace(/\/$/, "") : null;
         let html = Array.isArray(blocks) && blocks.length > 0
@@ -243,7 +266,8 @@ Deno.serve(async (req) => {
           }
         }
 
-        const sendRes = await gatewaySend(gatewayUrl, gatewayToken, { to, subject: subj, html });
+        const from = fromEmail ? `"${senderName.replaceAll('"', "")}" <${fromEmail}>` : undefined;
+        const sendRes = await gatewaySend(gatewayUrl, gatewayToken, { to, subject: subj, html, from });
         const providerId = String(sendRes?.messageId ?? "");
 
         await dbFetch(`email_sends?workspace_id=eq.${encodeURIComponent(workspaceId)}&id=eq.${encodeURIComponent(id)}`, {

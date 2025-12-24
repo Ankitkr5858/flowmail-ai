@@ -33,6 +33,7 @@ export function Select<T extends string = string>({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuRect, setMenuRect] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null);
 
   const selected = useMemo(() => options.find(o => o.value === value) ?? null, [options, value]);
@@ -41,8 +42,12 @@ export function Select<T extends string = string>({
     if (!open) return;
     const onDocDown = (e: MouseEvent) => {
       const el = rootRef.current;
-      if (!el) return;
-      if (!el.contains(e.target as Node)) setOpen(false);
+      const menuEl = menuRef.current;
+      const t = e.target as Node;
+      // Root contains the trigger; menu is portaled to document.body, so include it too.
+      if (el && el.contains(t)) return;
+      if (menuEl && menuEl.contains(t)) return;
+      setOpen(false);
     };
     const onEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
@@ -105,6 +110,7 @@ export function Select<T extends string = string>({
       {open && menuRect
         ? createPortal(
             <div
+              ref={menuRef}
               className={cn(
                 'fixed z-[200] rounded-xl border border-slate-200 bg-white shadow-lg overflow-auto',
                 menuClassName

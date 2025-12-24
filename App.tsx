@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import CampaignCreator from './components/CampaignCreator';
@@ -12,26 +13,18 @@ import SettingsView from './components/SettingsView';
 import ContactDetailView from './components/ContactDetailView';
 import ContactEditor from './components/ContactEditor';
 import AutomationBuilderView from './components/AutomationBuilderView';
-import { ViewState, Campaign, Contact } from './types';
+import { Campaign, Contact } from './types';
 import { computeDashboardMetrics, useAppStore } from './store/AppStore';
 import { parseContactsCsv } from './services/csvImport';
-import { getSupabase } from './services/supabase';
 import { invokeEdgeFunction } from './services/edgeFunctions';
 import ConfirmDialog from './components/ConfirmDialog';
 import AlertDialog from './components/AlertDialog';
 
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<ViewState>(ViewState.DASHBOARD);
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
-  const [contactsMode, setContactsMode] = useState<'list' | 'detail'>('list');
-  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [isContactEditorOpen, setIsContactEditorOpen] = useState(false);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
-  const [automationsMode, setAutomationsMode] = useState<'list' | 'builder'>('list');
-  const [selectedAutomationId, setSelectedAutomationId] = useState<string | null>(null);
-  const [contentMode, setContentMode] = useState<'list' | 'builder'>('list');
-  const [selectedContentCampaignId, setSelectedContentCampaignId] = useState<string | null>(null);
   const [composeForContactId, setComposeForContactId] = useState<string | null>(null);
   const [confirmSendId, setConfirmSendId] = useState<string | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
@@ -41,6 +34,7 @@ const App: React.FC = () => {
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
 
   const { state, actions } = useAppStore();
+  const navigate = useNavigate();
 
   const metrics = useMemo(() => computeDashboardMetrics(state), [state]);
   const chartData = state.chartData;
@@ -48,42 +42,10 @@ const App: React.FC = () => {
   const automations = state.automations;
   const contacts = state.contacts;
 
-  const selectedContact = useMemo(() => {
-    if (!selectedContactId) return null;
-    return contacts.find(c => c.id === selectedContactId) ?? null;
-  }, [contacts, selectedContactId]);
-
-  const selectedAutomation = useMemo(() => {
-    if (!selectedAutomationId) return null;
-    return automations.find(a => a.id === selectedAutomationId) ?? null;
-  }, [automations, selectedAutomationId]);
-
-  const selectedContentCampaign = useMemo(() => {
-    if (!selectedContentCampaignId) return null;
-    return campaigns.find(c => c.id === selectedContentCampaignId) ?? null;
-  }, [campaigns, selectedContentCampaignId]);
-
   const composeForContactName = useMemo(() => {
     if (!composeForContactId) return null;
     return contacts.find(c => c.id === composeForContactId)?.name ?? null;
   }, [composeForContactId, contacts]);
-
-  const handleSidebarViewChange = (view: ViewState) => {
-    setCurrentView(view);
-    if (view !== ViewState.CONTACTS) {
-      setContactsMode('list');
-      setSelectedContactId(null);
-    }
-    if (view !== ViewState.AUTOMATIONS) {
-      setAutomationsMode('list');
-      setSelectedAutomationId(null);
-    }
-    if (view !== ViewState.CONTENT) {
-      setContentMode('list');
-      setSelectedContentCampaignId(null);
-      setComposeForContactId(null);
-    }
-  };
 
   const handleDeleteCampaign = (id: string) => {
     if (window.confirm('Are you sure you want to delete this campaign? This action cannot be undone.')) {
@@ -97,10 +59,7 @@ const App: React.FC = () => {
   };
 
   const handleViewAnalytics = (id: string) => {
-    // Navigate to reports; campaign filter lives inside Reports
-    // (we'll pass selected id through localStorage param until we introduce proper routing)
-    try { localStorage.setItem('flowmail.ai.reports.selectedCampaignId', id); } catch {}
-    setCurrentView(ViewState.REPORTS);
+    navigate(`/reports?campaignId=${encodeURIComponent(id)}`);
   };
 
   const handleSaveCampaign = (campaignData: Partial<Campaign>) => {
@@ -150,8 +109,7 @@ const App: React.FC = () => {
   };
 
   const handleOpenContact = (id: string) => {
-    setSelectedContactId(id);
-    setContactsMode('detail');
+    navigate(`/contacts/${encodeURIComponent(id)}`);
   };
 
   const handleImportContactsCsv = async (file: File) => {
@@ -174,18 +132,15 @@ const App: React.FC = () => {
       trigger: 'Form Submitted',
       steps: [],
     });
-    setSelectedAutomationId(created.id);
-    setAutomationsMode('builder');
+    navigate(`/automations/${encodeURIComponent(created.id)}`);
   };
 
   const openAutomation = (id: string) => {
-    setSelectedAutomationId(id);
-    setAutomationsMode('builder');
+    navigate(`/automations/${encodeURIComponent(id)}`);
   };
 
   const openEmailBuilder = (campaignId: string) => {
-    setSelectedContentCampaignId(campaignId);
-    setContentMode('builder');
+    navigate(`/content/${encodeURIComponent(campaignId)}`);
   };
 
   const sendCampaignNow = async (campaignId: string) => {
@@ -196,6 +151,17 @@ const App: React.FC = () => {
       setSendBusy(true);
       const data = await invokeEdgeFunction<any>('send-campaign', { campaignId, workspaceId: 'default', limit: 50 });
       const queuedCount = Number((data as any)?.queued ?? 0);
+
+      // Kick the delivery worker immediately so sends feel "real-time".
+      // Queue is still the source of truth (retries/scheduling), but this drains it right away.
+      try {
+        if (queuedCount > 0) {
+          await invokeEdgeFunction<any>('email-send-worker', { workspaceId: 'default', batch: 25 });
+        }
+      } catch {
+        // ignore; cron/worker may still deliver later
+      }
+
       actions.updateCampaign(campaignId, {
         status: 'Sent',
         sentCount: queuedCount,
@@ -257,41 +223,42 @@ const App: React.FC = () => {
 
   return (
     <div className="flex min-h-screen bg-transparent">
-      <Sidebar currentView={currentView} onViewChange={handleSidebarViewChange} />
+      <Sidebar />
       
       <main className="ml-64 flex-1 p-8 h-screen overflow-y-auto relative">
-        {/* View Router */}
-        {currentView === ViewState.DASHBOARD && (
-          <Dashboard 
-            metrics={metrics}
-            chartData={chartData}
-            campaigns={campaigns.slice(0, 3)}
-            automations={automations.slice(0, 3)}
-            dateRangePreset={state.ui?.dateRangePreset ?? '30d'}
-            onDateRangePresetChange={actions.setDateRangePreset}
-            onRefresh={actions.refreshChartData}
+        <Routes>
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route
+            path="/dashboard"
+            element={
+              <Dashboard
+                metrics={metrics}
+                chartData={chartData}
+                campaigns={campaigns.slice(0, 3)}
+                automations={automations.slice(0, 3)}
+                dateRangePreset={state.ui?.dateRangePreset ?? '30d'}
+                onDateRangePresetChange={actions.setDateRangePreset}
+                onRefresh={actions.refreshAll}
+              />
+            }
           />
-        )}
-        {currentView === ViewState.CAMPAIGNS && (
-          <CampaignsView 
-            onCreate={openCreator} 
-            campaigns={campaigns} 
-            onDelete={handleDeleteCampaign}
-            onEdit={handleEditCampaign}
-            onAnalytics={handleViewAnalytics}
-            onOpenContent={(id) => {
-              setCurrentView(ViewState.CONTENT);
-              setContentMode('builder');
-              setSelectedContentCampaignId(id);
-            }}
-            onSendNow={(id) => {
-              setConfirmSendId(id);
-            }}
+          <Route
+            path="/campaigns"
+            element={
+              <CampaignsView
+                onCreate={openCreator}
+                campaigns={campaigns}
+                onDelete={handleDeleteCampaign}
+                onEdit={handleEditCampaign}
+                onAnalytics={handleViewAnalytics}
+                onOpenContent={(id) => navigate(`/content/${encodeURIComponent(id)}`)}
+                onSendNow={(id) => setConfirmSendId(id)}
+              />
+            }
           />
-        )}
-        {currentView === ViewState.AUTOMATIONS && (
-          <>
-            {automationsMode === 'list' && (
+          <Route
+            path="/automations"
+            element={
               <AutomationsView
                 automations={automations}
                 onCreate={createAutomation}
@@ -299,27 +266,15 @@ const App: React.FC = () => {
                 onToggleStatus={actions.toggleAutomationStatus}
                 onDelete={(id) => actions.deleteAutomation(id)}
               />
-            )}
-            {automationsMode === 'builder' && selectedAutomation && (
-              <AutomationBuilderView
-                automation={selectedAutomation}
-                onBack={() => { setAutomationsMode('list'); setSelectedAutomationId(null); }}
-                onToggleStatus={() => actions.toggleAutomationStatus(selectedAutomation.id)}
-                onDelete={() => {
-                  if (window.confirm('Delete this automation?')) {
-                    actions.deleteAutomation(selectedAutomation.id);
-                    setAutomationsMode('list');
-                    setSelectedAutomationId(null);
-                  }
-                }}
-                onUpdate={(patch) => actions.updateAutomation(selectedAutomation.id, patch)}
-              />
-            )}
-          </>
-        )}
-        {currentView === ViewState.CONTACTS && (
-          <>
-            {contactsMode === 'list' && (
+            }
+          />
+          <Route
+            path="/automations/:automationId"
+            element={<AutomationRoute automations={automations} onBack={() => navigate('/automations')} />}
+          />
+          <Route
+            path="/contacts"
+            element={
               <ContactsView
                 contacts={contacts}
                 onCreate={openContactCreator}
@@ -330,49 +285,24 @@ const App: React.FC = () => {
                 }}
                 onImportCsv={handleImportContactsCsv}
               />
-            )}
-            {contactsMode === 'detail' && selectedContact && (
-              <ContactDetailView
-                contact={selectedContact}
-                onBack={() => { setContactsMode('list'); setSelectedContactId(null); }}
-                onEdit={() => openContactEditor(selectedContact.id)}
-                onSendEmail={() => {
-                  setComposeForContactId(selectedContact.id);
-                  setCurrentView(ViewState.CONTENT);
-                  setContentMode('list');
-                }}
-                onAddToWorkflow={() => {
-                  setCurrentView(ViewState.AUTOMATIONS);
-                  setAutomationsMode('list');
-                }}
-              />
-            )}
-          </>
-        )}
-        {currentView === ViewState.CONTENT && (
-          <>
-            {contentMode === 'list' && (
-              <ContentView
-                campaigns={campaigns}
-                onOpenBuilder={openEmailBuilder}
-                composeForContactName={composeForContactName}
-              />
-            )}
-            {contentMode === 'builder' && selectedContentCampaign && (
-              <EmailBuilderView
-                campaign={selectedContentCampaign}
-                onBack={() => { setContentMode('list'); setSelectedContentCampaignId(null); }}
-                onUpdate={(patch) => actions.updateCampaign(selectedContentCampaign.id, patch)}
-              />
-            )}
-          </>
-        )}
-        {currentView === ViewState.REPORTS && (
-          <ReportsView />
-        )}
-        {currentView === ViewState.SETTINGS && (
-          <SettingsView />
-        )}
+            }
+          />
+          <Route
+            path="/contacts/:contactId"
+            element={<ContactRoute contacts={contacts} onBack={() => navigate('/contacts')} onEdit={openContactEditor} onCompose={(id) => { setComposeForContactId(id); navigate('/content'); }} onGoAutomations={() => navigate('/automations')} />}
+          />
+          <Route
+            path="/content"
+            element={<ContentView campaigns={campaigns} onOpenBuilder={openEmailBuilder} composeForContactName={composeForContactName} />}
+          />
+          <Route
+            path="/content/:campaignId"
+            element={<ContentBuilderRoute campaigns={campaigns} onBack={() => navigate('/content')} onUpdate={actions.updateCampaign} />}
+          />
+          <Route path="/reports" element={<ReportsRoute />} />
+          <Route path="/settings" element={<SettingsView />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
 
       </main>
 
@@ -422,3 +352,76 @@ const App: React.FC = () => {
 };
 
 export default App;
+
+function AutomationRoute({ automations, onBack }: { automations: any[]; onBack: () => void }) {
+  const { actions } = useAppStore();
+  const { automationId } = useParams();
+  const automation = useMemo(() => automations.find((a: any) => a.id === automationId) ?? null, [automations, automationId]);
+  if (!automation) return <Navigate to="/automations" replace />;
+  return (
+    <AutomationBuilderView
+      automation={automation}
+      onBack={onBack}
+      onToggleStatus={() => actions.toggleAutomationStatus(automation.id)}
+      onDelete={() => {
+        if (window.confirm('Delete this automation?')) {
+          actions.deleteAutomation(automation.id);
+          onBack();
+        }
+      }}
+      onUpdate={(patch) => actions.updateAutomation(automation.id, patch)}
+    />
+  );
+}
+
+function ContactRoute({
+  contacts,
+  onBack,
+  onEdit,
+  onCompose,
+  onGoAutomations,
+}: {
+  contacts: Contact[];
+  onBack: () => void;
+  onEdit: (id: string) => void;
+  onCompose: (id: string) => void;
+  onGoAutomations: () => void;
+}) {
+  const { contactId } = useParams();
+  const contact = useMemo(() => contacts.find((c) => c.id === contactId) ?? null, [contacts, contactId]);
+  if (!contact) return <Navigate to="/contacts" replace />;
+  return (
+    <ContactDetailView
+      contact={contact}
+      onBack={onBack}
+      onEdit={() => onEdit(contact.id)}
+      onSendEmail={() => onCompose(contact.id)}
+      onAddToWorkflow={onGoAutomations}
+    />
+  );
+}
+
+function ContentBuilderRoute({
+  campaigns,
+  onBack,
+  onUpdate,
+}: {
+  campaigns: Campaign[];
+  onBack: () => void;
+  onUpdate: (id: string, patch: Partial<Campaign>) => void;
+}) {
+  const { campaignId } = useParams();
+  const campaign = useMemo(() => campaigns.find((c) => c.id === campaignId) ?? null, [campaigns, campaignId]);
+  if (!campaign) return <Navigate to="/content" replace />;
+  return <EmailBuilderView campaign={campaign} onBack={onBack} onUpdate={(patch) => onUpdate(campaign.id, patch)} />;
+}
+
+function ReportsRoute() {
+  const [params] = useSearchParams();
+  const campaignId = params.get('campaignId');
+  useEffect(() => {
+    if (!campaignId) return;
+    try { localStorage.setItem('flowmail.ai.reports.selectedCampaignId', campaignId); } catch {}
+  }, [campaignId]);
+  return <ReportsView />;
+}

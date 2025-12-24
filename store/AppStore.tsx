@@ -25,7 +25,8 @@ export interface AppState {
 type Updater = (prev: AppState) => AppState;
 type Listener = () => void;
 
-const STORAGE_KEY = 'flowmail.ai.appState.v1';
+// Bump storage version to avoid showing any previously cached demo/dummy data.
+const STORAGE_KEY = 'flowmail.ai.appState.v2';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -155,6 +156,104 @@ async function fetchChartDataFromSupabase(preset: DateRangePreset): Promise<Char
   }));
 }
 
+async function refreshCampaignMetricsFromSupabase(): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const sb = getSupabase();
+  if (!sb) return;
+  const { data: sess } = await sb.auth.getSession();
+  if (!sess.session) return;
+
+  const ws = getWorkspaceId() || 'default';
+  const { data: rows, error } = await sb
+    .from('email_sends')
+    .select('campaign_id,status,opened_at,clicked_at')
+    .eq('workspace_id', ws)
+    .limit(10000);
+  if (error) throw error;
+
+  const byCampaign = new Map<string, { delivered: number; opens: number; clicks: number }>();
+  (rows ?? []).forEach((r: any) => {
+    const id = String(r?.campaign_id ?? '').trim();
+    if (!id) return;
+    const status = String(r?.status ?? '').toLowerCase();
+    const delivered = status !== 'failed' ? 1 : 0;
+    const opens = r?.opened_at ? 1 : 0;
+    const clicks = r?.clicked_at ? 1 : 0;
+    const cur = byCampaign.get(id) ?? { delivered: 0, opens: 0, clicks: 0 };
+    cur.delivered += delivered;
+    cur.opens += opens;
+    cur.clicks += clicks;
+    byCampaign.set(id, cur);
+  });
+
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  setState((prev) => {
+    const nextCampaigns = prev.campaigns.map((c) => {
+      const stats = byCampaign.get(String(c.id)) ?? null;
+      if (!stats) return c;
+      const openRate = stats.delivered > 0 ? pct(stats.opens / stats.delivered) : '0.0%';
+      const clickRate = stats.delivered > 0 ? pct(stats.clicks / stats.delivered) : '0.0%';
+      return {
+        ...c,
+        sentCount: stats.delivered,
+        openCount: stats.opens,
+        clickCount: stats.clicks,
+        openRate,
+        clickRate,
+      };
+    });
+    return { ...prev, campaigns: nextCampaigns };
+  });
+}
+
+async function refreshAutomationMetricsFromSupabase(): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const sb = getSupabase();
+  if (!sb) return;
+  const { data: sess } = await sb.auth.getSession();
+  if (!sess.session) return;
+
+  const ws = getWorkspaceId() || 'default';
+  const { data: rows, error } = await sb
+    .from('automation_runs')
+    .select('automation_id,contact_id,status,started_at,finished_at,last_error')
+    .eq('workspace_id', ws)
+    .order('started_at', { ascending: false })
+    .limit(10000);
+  if (error) throw error;
+
+  const byAutomation = new Map<string, { contacts: Set<string>; lastAt: string | null; errors: number }>();
+  (rows ?? []).forEach((r: any) => {
+    const aid = String(r?.automation_id ?? '').trim();
+    if (!aid) return;
+    const cid = String(r?.contact_id ?? '').trim();
+    const st = String(r?.status ?? '').toLowerCase();
+    const hasErr = Boolean(r?.last_error) || st === 'failed';
+    const t = String(r?.finished_at ?? r?.started_at ?? '').trim() || null;
+    const cur = byAutomation.get(aid) ?? { contacts: new Set<string>(), lastAt: null, errors: 0 };
+    if (cid) cur.contacts.add(cid);
+    if (t && (!cur.lastAt || new Date(t) > new Date(cur.lastAt))) cur.lastAt = t;
+    if (hasErr) cur.errors += 1;
+    byAutomation.set(aid, cur);
+  });
+
+  setState((prev) => {
+    const nextAutos = prev.automations.map((a) => {
+      const stats = byAutomation.get(String(a.id)) ?? null;
+      if (!stats) return { ...a, errorCount: 0 };
+      const count = stats.contacts.size;
+      return {
+        ...a,
+        count,
+        runs: `${count} contacts`,
+        lastActivityAt: stats.lastAt ?? a.lastActivityAt,
+        errorCount: stats.errors,
+      };
+    });
+    return { ...prev, automations: nextAutos };
+  });
+}
+
 function normalizeLoadedState(s: AppState): AppState {
   const seeded = createSeedState();
   const ui: UiState = {
@@ -206,14 +305,19 @@ async function hydrateFromSupabase(): Promise<void> {
   try {
     const repo = await getRepo();
     if (!repo) return;
-    await repo.ensureSeedData();
     const data = await repo.fetchAll();
+    // Never show legacy demo records (from old seedData versions).
+    const demoCampaignNames = new Set(['Summer Sale Blast', 'Product Update Newsletter', 'Welcome Series - New Users', 'Black Friday Teaser']);
+    const demoAutomationNames = new Set(['Abandoned Cart Recovery', 'Post-Purchase Follow-up', 'Lead Nurturing Sequence', 'Win-back Inactive']);
+    const demoContactEmails = new Set(['jane.doe@example.com', 'john.smith@example.com']);
     setState((prev) => ({
       ...prev,
-      contacts: data.contacts,
-      campaigns: data.campaigns,
-      automations: data.automations,
+      contacts: (data.contacts ?? []).filter((c) => !demoContactEmails.has(String(c.email ?? '').toLowerCase())),
+      campaigns: (data.campaigns ?? []).filter((c) => !demoCampaignNames.has(String(c.name ?? ''))),
+      automations: (data.automations ?? []).filter((a) => !demoAutomationNames.has(String(a.name ?? ''))),
     }));
+    await refreshCampaignMetricsFromSupabase();
+    await refreshAutomationMetricsFromSupabase();
     // Replace seeded chart data with real tracking data when available.
     const preset = getState().ui?.dateRangePreset ?? '30d';
     const real = await fetchChartDataFromSupabase(preset);
@@ -258,6 +362,7 @@ function subscribe(listener: Listener): () => void {
 export interface AppActions {
   setDateRangePreset: (preset: DateRangePreset) => void;
   refreshChartData: () => void;
+  refreshAll: () => void;
 
   createCampaign: (patch: Partial<Campaign>) => Campaign;
   updateCampaign: (id: string, patch: Partial<Campaign>) => void;
@@ -296,12 +401,26 @@ const actions: AppActions = {
             chartData: real,
             ui: { ...(prev.ui ?? createSeedState().ui), lastRefreshedAt: nowIso() },
           }));
+          return refreshCampaignMetricsFromSupabase();
         })
         .catch((e) => console.warn('[flowmail] chart refresh failed:', e));
+      void refreshAutomationMetricsFromSupabase().catch((e) => console.warn('[flowmail] automation refresh failed:', e));
       return;
     }
 
     // Local/demo mode: keep existing chart data
+    setState((prev) => ({
+      ...prev,
+      ui: { ...(prev.ui ?? createSeedState().ui), lastRefreshedAt: nowIso() },
+    }));
+  },
+
+  refreshAll: () => {
+    if (isSupabaseConfigured()) {
+      void hydrateFromSupabase();
+      return;
+    }
+    // If Supabase isn't configured, do not generate demo data—just update the timestamp.
     setState((prev) => ({
       ...prev,
       ui: { ...(prev.ui ?? createSeedState().ui), lastRefreshedAt: nowIso() },
@@ -326,8 +445,8 @@ const actions: AppActions = {
       emailBlocks: patch.emailBlocks,
       emailStyle: patch.emailStyle,
       segmentName: patch.segmentName,
-      createdAt,
-      updatedAt: createdAt,
+          createdAt,
+          updatedAt: createdAt,
       sentCount: patch.sentCount ?? 0,
       openCount: patch.openCount ?? 0,
       clickCount: patch.clickCount ?? 0,
@@ -393,7 +512,7 @@ const actions: AppActions = {
 
     const contact: Contact = {
       id,
-      name,
+          name,
       email: patch.email ?? '',
       status: patch.status ?? 'Subscribed',
       addedDate: patch.addedDate ?? formatDisplayDate(createdAt),
@@ -413,8 +532,8 @@ const actions: AppActions = {
       jobTitle: patch.jobTitle,
       location: patch.location,
       website: patch.website,
-      createdAt,
-      updatedAt: createdAt,
+          createdAt,
+          updatedAt: createdAt,
       events,
     };
 
@@ -463,8 +582,8 @@ const actions: AppActions = {
       count: patch.count ?? 0,
       trigger: patch.trigger,
       steps: patch.steps ?? [],
-      createdAt,
-      updatedAt: createdAt,
+          createdAt,
+          updatedAt: createdAt,
       lastActivityAt: patch.lastActivityAt ?? createdAt,
     };
     setState((prev) => ({ ...prev, automations: [automation, ...prev.automations] }));
@@ -482,8 +601,8 @@ const actions: AppActions = {
       if (!repo) return;
       const a = getState().automations.find((x) => x.id === id);
       if (a) return repo.upsertAutomation(a);
-    });
-  },
+        });
+      },
 
   deleteAutomation: (id) => {
     setState((prev) => ({ ...prev, automations: prev.automations.filter((a) => a.id !== id) }));

@@ -57,9 +57,25 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.post('/send', requireAuth, async (req, res) => {
   try {
-    const { to, subject, html, text, headers } = req.body || {};
-    const from = process.env.SMTP_FROM || process.env.SMTP_USER;
-    if (!from) return res.status(500).json({ error: 'SMTP_FROM not set' });
+    const { to, subject, html, text, headers, from: fromOverride } = req.body || {};
+    const envFrom = process.env.SMTP_FROM || process.env.SMTP_USER;
+    if (!envFrom) return res.status(500).json({ error: 'SMTP_FROM not set' });
+
+    // Allow caller to set a display-name, but do NOT allow changing the mailbox.
+    // Example allowed: `"Peremis" <info@peremis.com>` when envFrom is `info@peremis.com` (or includes it).
+    const extractEmail = (s) => {
+      const str = String(s || '').trim();
+      const m = str.match(/<([^>]+)>/);
+      if (m?.[1]) return m[1].trim().toLowerCase();
+      // raw email
+      if (str.includes('@') && !str.includes(' ')) return str.toLowerCase();
+      return '';
+    };
+    const envEmail = extractEmail(envFrom);
+    const requested = String(fromOverride || '').trim();
+    const requestedEmail = requested ? extractEmail(requested) : '';
+    const from = requested && envEmail && requestedEmail === envEmail ? requested : envFrom;
+
     if (!to) return res.status(400).json({ error: 'Missing to' });
     if (!subject) return res.status(400).json({ error: 'Missing subject' });
     if (!html && !text) return res.status(400).json({ error: 'Missing html/text' });

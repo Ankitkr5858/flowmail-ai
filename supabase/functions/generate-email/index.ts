@@ -79,6 +79,11 @@ Topic: ${topic}
 Tone: ${safeTone}
 Audience type: ${audience}
 
+IMPORTANT personalization rules:
+- Use "{{firstName}}" when greeting the recipient (do NOT use bracket placeholders like [Customer Name]).
+- Use "{{companyName}}" when referring to the sender/company (do NOT use bracket placeholders like [Your Company Name]).
+- Do not invent specific personal facts about the recipient; keep personalization generic.
+
 Return strictly valid JSON with keys "subject" and "body".
 Also include keys:
 - "previewText" (string)

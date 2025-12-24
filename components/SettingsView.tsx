@@ -149,7 +149,7 @@ const SettingsView: React.FC = () => {
         <div className="md:col-span-2 space-y-6">
           {!isSupabaseConfigured() && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-900 text-sm">
-              Supabase is not configured, so Settings will show demo values.
+              Settings are unavailable until your account is connected.
             </div>
           )}
           {authState.status !== 'signed_in' && isSupabaseConfigured() && (
@@ -181,7 +181,7 @@ const SettingsView: React.FC = () => {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Email Address</label>
                     <input type="email" value={userEmail || ''} readOnly className="w-full bg-slate-50 text-slate-700 border border-slate-300 rounded-lg px-3 py-2 outline-none" />
-                    <div className="text-xs text-slate-500 mt-1">Email comes from your Google/Supabase account.</div>
+                    <div className="text-xs text-slate-500 mt-1">This is your login email.</div>
                   </div>
                 </div>
               </div>
@@ -225,10 +225,8 @@ const SettingsView: React.FC = () => {
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
               <h2 className="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">Security & API</h2>
               <div className="space-y-3 text-sm text-slate-700">
-                <div><span className="font-semibold">Supabase configured:</span> {isSupabaseConfigured() ? 'Yes' : 'No'}</div>
-                <div><span className="font-semibold">Workspace:</span> {workspaceId}</div>
-                <div className="text-xs text-slate-500">
-                  Server secrets (SMTP gateway token, service role key, unsubscribe signing key) are stored in Supabase/VPS and cannot be shown in the browser.
+                <div className="text-slate-600">
+                  Security keys are stored on the server and aren’t shown in the app.
                 </div>
               </div>
             </div>
@@ -238,7 +236,7 @@ const SettingsView: React.FC = () => {
             <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
               <h2 className="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">Billing</h2>
               <div className="text-sm text-slate-600">
-                Billing is not implemented in this starter. (Connect Stripe here in production.)
+                Billing will appear here once enabled.
               </div>
             </div>
           )}

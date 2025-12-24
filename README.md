@@ -24,6 +24,28 @@ View your app in AI Studio: https://ai.studio/apps/drive/1kMscKuN2L41sC5xE52dvtR
 4. Run the app:
    `npm run dev`
 
+## Deploy Frontend (Netlify)
+This app uses `react-router-dom` with **BrowserRouter**, so Netlify must be configured for SPA routing.
+
+### 1) Netlify settings
+- **Build command**: `npm run build`
+- **Publish directory**: `dist`
+- A `netlify.toml` is included (SPA redirect + caching).
+
+### 2) Environment variables (Netlify → Site → Settings → Environment variables)
+Set these (same values you use in `.env.local`):
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `VITE_WORKSPACE_ID` (optional; default is `default`)
+- `VITE_SEED_DEMO_DATA` (optional; set `false` for production)
+
+After changing env vars in Netlify, trigger a new deploy (env vars are baked at build time for Vite).
+
+### 3) Supabase Auth redirect URLs
+Supabase Dashboard → **Authentication → URL Configuration**
+- **Site URL**: your Netlify URL (example: `https://your-site.netlify.app`)
+- **Redirect URLs**: add the same Netlify URL (and any custom domain you use)
+
 ## Database (Supabase)
 Run the schema in Supabase Dashboard → SQL Editor:
 - `supabase/schema.sql`

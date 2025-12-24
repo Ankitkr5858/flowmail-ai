@@ -32,9 +32,12 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ metrics, chartData, campaigns, automations, dateRangePreset, onDateRangePresetChange, onRefresh }) => {
   const activeCount = automations.filter(a => a.status === 'Running').length;
   const pausedCount = automations.filter(a => a.status === 'Paused').length;
+  const errorsCount = automations.reduce((sum, a) => sum + (a.errorCount ?? 0), 0);
   const totalCount = automations.length || 1;
-  const healthyPct = Math.round((activeCount / totalCount) * 100);
+  const healthyCount = automations.filter(a => a.status === 'Running' && (a.errorCount ?? 0) === 0).length;
+  const healthyPct = Math.round((healthyCount / totalCount) * 100);
   const issuePct = 100 - healthyPct;
+  const activeAutomations = automations.filter(a => a.status === 'Running');
 
   const HEALTH_DATA = [
     { name: 'Healthy', value: healthyPct },
@@ -181,7 +184,7 @@ const Dashboard: React.FC<DashboardProps> = ({ metrics, chartData, campaigns, au
             </div>
             <div>
               <p className="text-xs text-slate-500 mb-1">Errors:</p>
-              <p className="text-xl font-bold text-red-500">0</p>
+              <p className="text-xl font-bold text-red-500">{errorsCount}</p>
             </div>
           </div>
         </Card>
@@ -198,7 +201,9 @@ const Dashboard: React.FC<DashboardProps> = ({ metrics, chartData, campaigns, au
               <div key={campaign.id} className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-lg transition-colors group">
                 <div>
                   <h4 className="font-medium text-slate-800 text-sm">{campaign.name}</h4>
-                  <p className="text-xs text-slate-500 mt-1">{campaign.date}</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {campaign.createdAt ? new Date(campaign.createdAt).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : campaign.date}
+                  </p>
                 </div>
                 <div className="flex items-center gap-4">
                   <Badge
@@ -223,20 +228,26 @@ const Dashboard: React.FC<DashboardProps> = ({ metrics, chartData, campaigns, au
         {/* Active Automations */}
         <Card className="p-6 border-slate-100">
           <h3 className="font-semibold text-slate-800 text-lg mb-4">Active Automations</h3>
-          <div className="space-y-4">
-            {automations.map((auto) => (
-              <div key={auto.id} className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-lg transition-colors">
-                 <div>
-                  <h4 className="font-medium text-slate-800 text-sm">{auto.name}</h4>
-                  <p className="text-xs text-slate-500 mt-1">{auto.runs}</p>
+          {activeAutomations.length === 0 ? (
+            <div className="h-48 flex items-center justify-center text-slate-500 text-sm">
+              No active automations
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {activeAutomations.map((auto) => (
+                <div key={auto.id} className="flex items-center justify-between p-3 hover:bg-slate-50 rounded-lg transition-colors">
+                  <div>
+                    <h4 className="font-medium text-slate-800 text-sm">{auto.name}</h4>
+                    <p className="text-xs text-slate-500 mt-1">{auto.runs}</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <Badge variant="success">Running</Badge>
+                    <span className="text-sm font-semibold text-slate-700 w-12 text-right">{auto.count}</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-4">
-                   <Badge variant={auto.status === 'Running' ? 'success' : 'default'}>{auto.status}</Badge>
-                   <span className="text-sm font-semibold text-slate-700 w-12 text-right">{auto.count}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </Card>
 
       </div>

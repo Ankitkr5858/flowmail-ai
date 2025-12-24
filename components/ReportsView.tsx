@@ -7,7 +7,7 @@ import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import type { DateRangePreset } from '../store/AppStore';
 import { Select } from './ui/Select';
-import { getSupabase } from '../services/supabase';
+import { getSupabase, getWorkspaceId } from '../services/supabase';
 
 const ReportsView: React.FC = () => {
   const { state, actions } = useAppStore();
@@ -72,10 +72,11 @@ const ReportsView: React.FC = () => {
         setRecipientsError(null);
         const supabase = getSupabase();
         if (!supabase) throw new Error('Supabase not configured');
+        const ws = getWorkspaceId() || 'default';
         const { data, error } = await supabase
           .from('email_sends')
           .select('to_email,status,sent_at')
-          .eq('workspace_id', 'default')
+          .eq('workspace_id', ws)
           .eq('campaign_id', selectedCampaignId)
           .order('created_at', { ascending: false })
           .limit(200);
@@ -175,14 +176,14 @@ const ReportsView: React.FC = () => {
         const sb = getSupabase();
         if (!sb) throw new Error('Supabase not configured');
 
-        const ws = 'default';
+        const ws = getWorkspaceId() || 'default';
         const startIso = startDate.toISOString();
         const endIso = new Date().toISOString();
         const buckets = buildBuckets(dateRangePreset);
 
         const base = sb
           .from('email_sends')
-          .select('sent_at,opened_at,clicked_at,created_at')
+          .select('status,sent_at,opened_at,clicked_at,created_at')
           .eq('workspace_id', ws)
           .gte('created_at', startIso)
           .limit(10000);
@@ -191,7 +192,8 @@ const ReportsView: React.FC = () => {
         if (error) throw error;
         if (cancelled) return;
 
-        const sent = (rows ?? []).filter((r: any) => Boolean(r.sent_at)).length;
+        // With SMTP we don't have true "delivered" events; we treat non-failed as delivered-attempted.
+        const delivered = (rows ?? []).filter((r: any) => String(r?.status ?? '').toLowerCase() !== 'failed').length;
         const opens = (rows ?? []).filter((r: any) => Boolean(r.opened_at)).length;
         const clicks = (rows ?? []).filter((r: any) => Boolean(r.clicked_at)).length;
 
@@ -219,11 +221,11 @@ const ReportsView: React.FC = () => {
         setReportChartData(series);
 
         setKpi({
-          delivered: sent,
+          delivered,
           opens,
           clicks,
-          openRate: sent > 0 ? opens / sent : 0,
-          clickRate: sent > 0 ? clicks / sent : 0,
+          openRate: delivered > 0 ? opens / delivered : 0,
+          clickRate: delivered > 0 ? clicks / delivered : 0,
           unsub: Array.isArray(unsubRows) ? unsubRows.length : 0,
           spam: 0,
           bounces: 0,
@@ -368,9 +370,7 @@ const ReportsView: React.FC = () => {
               Apply Filters
             </Button>
 
-            <div className="text-xs text-slate-500">
-              Segment filtering is mocked until we add real audience segments.
-            </div>
+            <div className="text-xs text-slate-500" />
           </div>
         </Card>
 
@@ -425,9 +425,7 @@ const ReportsView: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <div className="font-semibold text-slate-900">Top Links</div>
-                  <div className="text-xs text-slate-500 mt-1">
-                    Real clicks from <span className="font-mono">contact_events</span>
-                  </div>
+                  <div className="text-xs text-slate-500 mt-1" />
                 </div>
                 <div className="text-xs text-slate-500">{analyticsLoading ? 'Loading…' : ''}</div>
               </div>
@@ -493,9 +491,7 @@ const ReportsView: React.FC = () => {
                                 <div className="text-sm font-semibold text-slate-900 truncate">{b.label}</div>
                                 {b.url ? (
                                   <div className="mt-1 text-xs text-slate-500 truncate">{b.url}</div>
-                                ) : (
-                                  <div className="mt-1 text-xs text-slate-400 truncate">blockId: {b.bid}</div>
-                                )}
+                                ) : null}
                               </div>
                               <div className="shrink-0 text-sm font-semibold text-slate-900">{b.clicks}</div>
                             </div>
@@ -520,9 +516,7 @@ const ReportsView: React.FC = () => {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="font-semibold text-slate-900">Recipients</div>
-                  <div className="text-xs text-slate-500 mt-1">
-                    This list comes from <span className="font-mono">email_sends</span> for the selected campaign.
-                  </div>
+                  <div className="text-xs text-slate-500 mt-1" />
                 </div>
                 <Button
                   variant="secondary"

@@ -35,6 +35,8 @@ export interface Automation {
   runs: string;
   status: 'Running' | 'Paused';
   count: number;
+  // Derived from automation_runs (not necessarily persisted)
+  errorCount?: number;
   trigger?: string;
   createdAt?: string; // ISO
   updatedAt?: string; // ISO

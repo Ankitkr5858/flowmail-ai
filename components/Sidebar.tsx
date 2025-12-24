@@ -10,24 +10,19 @@ import {
   LogOut,
   Mail
 } from 'lucide-react';
-import { ViewState } from '../types';
+import { NavLink } from 'react-router-dom';
 import { useAuth } from '../store/AuthStore';
 
-interface SidebarProps {
-  currentView: ViewState;
-  onViewChange: (view: ViewState) => void;
-}
-
-const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
+const Sidebar: React.FC = () => {
   const { state: auth, actions: authActions } = useAuth();
   const menuItems = [
-    { icon: LayoutDashboard, label: ViewState.DASHBOARD },
-    { icon: Send, label: ViewState.CAMPAIGNS },
-    { icon: GitBranch, label: ViewState.AUTOMATIONS },
-    { icon: Users, label: ViewState.CONTACTS },
-    { icon: FileText, label: ViewState.CONTENT },
-    { icon: BarChart2, label: ViewState.REPORTS },
-    { icon: Settings, label: ViewState.SETTINGS },
+    { icon: LayoutDashboard, label: 'Dashboard', to: '/dashboard' },
+    { icon: Send, label: 'Campaigns', to: '/campaigns' },
+    { icon: GitBranch, label: 'Automations', to: '/automations' },
+    { icon: Users, label: 'Contacts', to: '/contacts' },
+    { icon: FileText, label: 'Content', to: '/content' },
+    { icon: BarChart2, label: 'Reports', to: '/reports' },
+    { icon: Settings, label: 'Settings', to: '/settings' },
   ];
 
   const userEmail = auth.user?.email ?? '—';
@@ -58,24 +53,27 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
 
       {/* Navigation */}
       <nav className="flex-1 py-6 px-3 space-y-1">
-        {menuItems.map((item) => {
-          const isActive = currentView === item.label;
-          return (
-            <button
-              key={item.label}
-              onClick={() => onViewChange(item.label)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-150 group ${
+        {menuItems.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) =>
+              `w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-150 group ${
                 isActive
                   ? 'bg-slate-50 text-slate-900 font-semibold border border-slate-200'
                   : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <span className={`w-1 self-stretch rounded-full ${isActive ? 'bg-sky-600' : 'bg-transparent'}`} />
-              <item.icon className={`app-icon w-5 h-5 ${isActive ? 'app-icon-brand' : 'app-icon-muted'}`} />
-              <span>{item.label}</span>
-            </button>
-          );
-        })}
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <span className={`w-1 self-stretch rounded-full ${isActive ? 'bg-sky-600' : 'bg-transparent'}`} />
+                <item.icon className={`app-icon w-5 h-5 ${isActive ? 'app-icon-brand' : 'app-icon-muted'}`} />
+                <span>{item.label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
       </nav>
 
       {/* User Profile / Bottom */}
