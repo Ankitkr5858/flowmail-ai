@@ -21,7 +21,7 @@ const SettingsView: React.FC = () => {
   const [defaultFromEmail, setDefaultFromEmail] = useState<string>('jimmy@peremis.com');
   const [teamNotifyEmail, setTeamNotifyEmail] = useState<string>('jimmy@peremis.com');
 
-  const workspaceId = useMemo(() => getWorkspaceId() || 'default', []);
+  const workspaceId = useMemo(() => getWorkspaceId() || 'default', [authState.user?.id]);
 
   const fmtErr = (e: unknown): string => {
     if (e instanceof Error) return e.message;

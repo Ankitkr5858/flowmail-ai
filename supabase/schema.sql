@@ -1,9 +1,13 @@
--- FlowMail AI (Supabase) schema upgrades for Phase 1 (single-tenant).
+-- FlowMail AI (Supabase) schema upgrades for Phase 1 (single-tenant → per-user).
 -- Run in Supabase Dashboard → SQL Editor.
 --
 -- This file is migration-friendly (uses IF NOT EXISTS) so you can re-run it safely.
 
 create extension if not exists pgcrypto;
+
+-- IMPORTANT (production): per-user data isolation
+-- We store `workspace_id` as the authenticated user's id (auth.uid()::text).
+-- This ensures each signed-in user sees only their own rows.
 
 create table if not exists public.contacts (
   workspace_id text not null default 'default',
@@ -43,6 +47,9 @@ create table if not exists public.contacts (
   primary key (workspace_id, id)
 );
 
+-- Set workspace default to the signed-in user's id for new rows (when inserting via anon/authenticated keys)
+alter table public.contacts alter column workspace_id set default (auth.uid()::text);
+
 -- Add columns if you created the table earlier from a previous version.
 alter table public.contacts add column if not exists last_purchase_date timestamptz;
 alter table public.contacts add column if not exists total_emails_sent integer not null default 0;
@@ -65,6 +72,7 @@ create table if not exists public.best_time_cursor (
   updated_at timestamptz not null default now(),
   primary key (workspace_id, id)
 );
+alter table public.best_time_cursor alter column workspace_id set default (auth.uid()::text);
 
 create index if not exists best_time_cursor_updated_idx on public.best_time_cursor (workspace_id, updated_at desc);
 
@@ -91,6 +99,7 @@ create table if not exists public.campaigns (
   updated_at timestamptz not null default now(),
   primary key (workspace_id, id)
 );
+alter table public.campaigns alter column workspace_id set default (auth.uid()::text);
 
 create table if not exists public.automations (
   workspace_id text not null default 'default',
@@ -106,6 +115,7 @@ create table if not exists public.automations (
   updated_at timestamptz not null default now(),
   primary key (workspace_id, id)
 );
+alter table public.automations alter column workspace_id set default (auth.uid()::text);
 
 -- Workspace settings (real Settings screen)
 create table if not exists public.workspace_settings (
@@ -118,6 +128,7 @@ create table if not exists public.workspace_settings (
   updated_at timestamptz not null default now(),
   primary key (workspace_id)
 );
+alter table public.workspace_settings alter column workspace_id set default (auth.uid()::text);
 
 -- If the table existed from an older schema, add missing columns safely.
 alter table public.workspace_settings add column if not exists company_name text;
@@ -129,19 +140,19 @@ alter table public.workspace_settings enable row level security;
 
 do $$
 begin
-  -- Authenticated users can read/write workspace settings (single-tenant).
+  -- Authenticated users can read/write their own workspace settings (per-user).
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='workspace_settings' and policyname='workspace_settings_read') then
-    execute 'create policy workspace_settings_read on public.workspace_settings for select to authenticated using (true)';
+    execute 'create policy workspace_settings_read on public.workspace_settings for select to authenticated using (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='workspace_settings' and policyname='workspace_settings_write') then
-    execute 'create policy workspace_settings_write on public.workspace_settings for insert to authenticated with check (true)';
+    execute 'create policy workspace_settings_write on public.workspace_settings for insert to authenticated with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='workspace_settings' and policyname='workspace_settings_update') then
-    execute 'create policy workspace_settings_update on public.workspace_settings for update to authenticated using (true) with check (true)';
+    execute 'create policy workspace_settings_update on public.workspace_settings for update to authenticated using (workspace_id = auth.uid()::text) with check (workspace_id = auth.uid()::text)';
   end if;
 end $$;
 
--- ---- Core table RLS policies (single-tenant) ----
+-- ---- Core table RLS policies (per-user) ----
 -- These policies allow authenticated users to read/write app data.
 -- Service role (Edge Functions) bypasses RLS automatically.
 
@@ -155,66 +166,66 @@ do $$
 begin
   -- contacts
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_read') then
-    execute 'create policy contacts_read on public.contacts for select to authenticated using (true)';
+    execute 'create policy contacts_read on public.contacts for select to authenticated using (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_write') then
-    execute 'create policy contacts_write on public.contacts for insert to authenticated with check (true)';
+    execute 'create policy contacts_write on public.contacts for insert to authenticated with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_update') then
-    execute 'create policy contacts_update on public.contacts for update to authenticated using (true) with check (true)';
+    execute 'create policy contacts_update on public.contacts for update to authenticated using (workspace_id = auth.uid()::text) with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contacts' and policyname='contacts_delete') then
-    execute 'create policy contacts_delete on public.contacts for delete to authenticated using (true)';
+    execute 'create policy contacts_delete on public.contacts for delete to authenticated using (workspace_id = auth.uid()::text)';
   end if;
 
   -- campaigns
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_read') then
-    execute 'create policy campaigns_read on public.campaigns for select to authenticated using (true)';
+    execute 'create policy campaigns_read on public.campaigns for select to authenticated using (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_write') then
-    execute 'create policy campaigns_write on public.campaigns for insert to authenticated with check (true)';
+    execute 'create policy campaigns_write on public.campaigns for insert to authenticated with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_update') then
-    execute 'create policy campaigns_update on public.campaigns for update to authenticated using (true) with check (true)';
+    execute 'create policy campaigns_update on public.campaigns for update to authenticated using (workspace_id = auth.uid()::text) with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='campaigns' and policyname='campaigns_delete') then
-    execute 'create policy campaigns_delete on public.campaigns for delete to authenticated using (true)';
+    execute 'create policy campaigns_delete on public.campaigns for delete to authenticated using (workspace_id = auth.uid()::text)';
   end if;
 
   -- automations
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_read') then
-    execute 'create policy automations_read on public.automations for select to authenticated using (true)';
+    execute 'create policy automations_read on public.automations for select to authenticated using (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_write') then
-    execute 'create policy automations_write on public.automations for insert to authenticated with check (true)';
+    execute 'create policy automations_write on public.automations for insert to authenticated with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_update') then
-    execute 'create policy automations_update on public.automations for update to authenticated using (true) with check (true)';
+    execute 'create policy automations_update on public.automations for update to authenticated using (workspace_id = auth.uid()::text) with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='automations' and policyname='automations_delete') then
-    execute 'create policy automations_delete on public.automations for delete to authenticated using (true)';
+    execute 'create policy automations_delete on public.automations for delete to authenticated using (workspace_id = auth.uid()::text)';
   end if;
 
   -- contact_events
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contact_events' and policyname='contact_events_read') then
-    execute 'create policy contact_events_read on public.contact_events for select to authenticated using (true)';
+    execute 'create policy contact_events_read on public.contact_events for select to authenticated using (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contact_events' and policyname='contact_events_write') then
-    execute 'create policy contact_events_write on public.contact_events for insert to authenticated with check (true)';
+    execute 'create policy contact_events_write on public.contact_events for insert to authenticated with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='contact_events' and policyname='contact_events_update') then
-    execute 'create policy contact_events_update on public.contact_events for update to authenticated using (true) with check (true)';
+    execute 'create policy contact_events_update on public.contact_events for update to authenticated using (workspace_id = auth.uid()::text) with check (workspace_id = auth.uid()::text)';
   end if;
 
   -- email_sends
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='email_sends' and policyname='email_sends_read') then
-    execute 'create policy email_sends_read on public.email_sends for select to authenticated using (true)';
+    execute 'create policy email_sends_read on public.email_sends for select to authenticated using (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='email_sends' and policyname='email_sends_write') then
-    execute 'create policy email_sends_write on public.email_sends for insert to authenticated with check (true)';
+    execute 'create policy email_sends_write on public.email_sends for insert to authenticated with check (workspace_id = auth.uid()::text)';
   end if;
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='email_sends' and policyname='email_sends_update') then
-    execute 'create policy email_sends_update on public.email_sends for update to authenticated using (true) with check (true)';
+    execute 'create policy email_sends_update on public.email_sends for update to authenticated using (workspace_id = auth.uid()::text) with check (workspace_id = auth.uid()::text)';
   end if;
 end $$;
 

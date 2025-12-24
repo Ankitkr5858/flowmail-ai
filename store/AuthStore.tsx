@@ -36,10 +36,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await sb.auth.getSession();
       if (cancelled) return;
       const session = data.session ?? null;
+      try {
+        if (session?.user?.id) localStorage.setItem('flowmail.ai.workspaceId', session.user.id);
+        else localStorage.removeItem('flowmail.ai.workspaceId');
+      } catch {}
       setState({ status: session ? 'signed_in' : 'signed_out', session, user: session?.user ?? null });
     })();
 
     const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
+      try {
+        if (session?.user?.id) localStorage.setItem('flowmail.ai.workspaceId', session.user.id);
+        else localStorage.removeItem('flowmail.ai.workspaceId');
+      } catch {}
       setState({ status: session ? 'signed_in' : 'signed_out', session: session ?? null, user: session?.user ?? null });
     });
 
@@ -63,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const sb = getSupabase();
         if (!sb) return;
         await sb.auth.signOut();
+        try { localStorage.removeItem('flowmail.ai.workspaceId'); } catch {}
         // Hard refresh to ensure all cached app state resets behind RLS.
         window.location.assign(`${window.location.origin}/login`);
       },

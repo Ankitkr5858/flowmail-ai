@@ -290,14 +290,29 @@ function setState(update: Updater): void {
 
 // ---- Supabase sync (single-tenant) ----
 let supaRepo: SupabaseRepo | null = null;
+let supaRepoWs: string | null = null;
 let supaInitStarted = false;
+
+async function resolveWorkspaceIdFromSession(): Promise<string> {
+  const sb = getSupabase();
+  if (!sb) return getWorkspaceId() || 'default';
+  try {
+    const { data } = await sb.auth.getSession();
+    const uid = data.session?.user?.id;
+    return (uid && String(uid).trim()) ? String(uid).trim() : (getWorkspaceId() || 'default');
+  } catch {
+    return getWorkspaceId() || 'default';
+  }
+}
 
 async function getRepo(): Promise<SupabaseRepo | null> {
   if (!isSupabaseConfigured()) return null;
-  if (supaRepo) return supaRepo;
   const sb = getSupabase();
   if (!sb) return null;
-  supaRepo = createSupabaseRepo(sb, getWorkspaceId());
+  const ws = await resolveWorkspaceIdFromSession();
+  if (supaRepo && supaRepoWs === ws) return supaRepo;
+  supaRepoWs = ws;
+  supaRepo = createSupabaseRepo(sb, ws);
   return supaRepo;
 }
 

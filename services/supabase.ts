@@ -22,6 +22,14 @@ export function getSupabaseAnonKey(): string {
 }
 
 export function getWorkspaceId(): string {
+  // Prefer an auth-derived workspace (per-user isolation) if available.
+  // This is set by AuthStore on sign-in and cleared on sign-out.
+  try {
+    const stored = localStorage.getItem('flowmail.ai.workspaceId');
+    if (stored && stored.trim()) return stored.trim();
+  } catch {
+    // ignore
+  }
   const ws = envString(import.meta.env.VITE_WORKSPACE_ID) || envFromGlobalProcess('VITE_WORKSPACE_ID');
   return ws || 'default';
 }

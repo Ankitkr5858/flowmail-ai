@@ -20,6 +20,7 @@ import { invokeEdgeFunction } from './services/edgeFunctions';
 import ConfirmDialog from './components/ConfirmDialog';
 import AlertDialog from './components/AlertDialog';
 import LoginView from './components/LoginView';
+import { getWorkspaceId } from './services/supabase';
 
 const App: React.FC = () => {
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
@@ -150,14 +151,15 @@ const App: React.FC = () => {
 
     try {
       setSendBusy(true);
-      const data = await invokeEdgeFunction<any>('send-campaign', { campaignId, workspaceId: 'default', limit: 50 });
+      const workspaceId = getWorkspaceId();
+      const data = await invokeEdgeFunction<any>('send-campaign', { campaignId, workspaceId, limit: 50 });
       const queuedCount = Number((data as any)?.queued ?? 0);
 
       // Kick the delivery worker immediately so sends feel "real-time".
       // Queue is still the source of truth (retries/scheduling), but this drains it right away.
       try {
         if (queuedCount > 0) {
-          await invokeEdgeFunction<any>('email-send-worker', { workspaceId: 'default', batch: 25 });
+          await invokeEdgeFunction<any>('email-send-worker', { workspaceId, batch: 25 });
         }
       } catch {
         // ignore; cron/worker may still deliver later
@@ -198,7 +200,7 @@ const App: React.FC = () => {
         setSendPreviewError(null);
         const data = await invokeEdgeFunction<any>('send-campaign', {
           campaignId: confirmSendId,
-          workspaceId: 'default',
+          workspaceId: getWorkspaceId(),
           limit: 50,
           dryRun: true,
           sampleSize: 0,
