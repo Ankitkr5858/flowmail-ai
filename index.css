@@ -1,0 +1,76 @@
+/* Global app styles (Tailwind comes from CDN in index.html) */
+
+:root {
+  /* Force native form controls (select dropdowns etc.) to render in light mode */
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #f6f7fb;
+  --panel: #ffffff;
+  --panel-2: #f8fafc;
+
+  /* Text */
+  --text: #0b1220;
+  --muted: #64748b;
+
+  /* Borders / shadows */
+  --border: rgba(15, 23, 42, 0.12);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.08);
+
+  /* Brand (professional “sky” accent) */
+  --accent: #0284c7;   /* sky-600 */
+  --accent-700: #0369a1; /* sky-700 */
+  --ring: rgba(2, 132, 199, 0.25);
+
+  /* Icon system */
+  --icon: #475569;        /* slate-600 */
+  --icon-muted: #94a3b8;  /* slate-400 */
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  --icon-color: var(--icon);
+}
+
+/* Improve perceived “product quality” */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, input, select, textarea {
+  font: inherit;
+}
+
+/* Make native selects consistently “pro” and avoid dark dropdowns where supported */
+select {
+  background-color: #ffffff;
+  color: var(--text);
+}
+option {
+  background-color: #ffffff;
+  color: var(--text);
+}
+
+/* Icon primitives (lucide uses currentColor) */
+.app-icon { color: var(--icon-color, currentColor); }
+.app-icon-muted { --icon-color: var(--icon-muted); color: var(--icon-muted); }
+.app-icon-brand { --icon-color: var(--accent); color: var(--accent); }
+
+/* Let solid buttons keep white icons while still using .app-icon */
+.icon-on-solid { --icon-color: #ffffff; }
+.icon-inherit { --icon-color: currentColor; }
+
+/* Optional: consistent focus ring even when Tailwind ring utilities vary */
+input:focus, textarea:focus, select:focus {
+  box-shadow: 0 0 0 4px var(--ring);
+}
+
+

@@ -1,0 +1,105 @@
+import React from 'react';
+import { 
+  LayoutDashboard, 
+  Send, 
+  GitBranch, 
+  Users, 
+  BarChart2,
+  FileText,
+  Settings, 
+  LogOut,
+  Mail
+} from 'lucide-react';
+import { ViewState } from '../types';
+import { useAuth } from '../store/AuthStore';
+
+interface SidebarProps {
+  currentView: ViewState;
+  onViewChange: (view: ViewState) => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) => {
+  const { state: auth, actions: authActions } = useAuth();
+  const menuItems = [
+    { icon: LayoutDashboard, label: ViewState.DASHBOARD },
+    { icon: Send, label: ViewState.CAMPAIGNS },
+    { icon: GitBranch, label: ViewState.AUTOMATIONS },
+    { icon: Users, label: ViewState.CONTACTS },
+    { icon: FileText, label: ViewState.CONTENT },
+    { icon: BarChart2, label: ViewState.REPORTS },
+    { icon: Settings, label: ViewState.SETTINGS },
+  ];
+
+  const userEmail = auth.user?.email ?? '—';
+  const fullName =
+    (auth.user as any)?.user_metadata?.full_name ||
+    (auth.user as any)?.user_metadata?.name ||
+    'Signed in';
+  const initials = (() => {
+    const s = String(fullName || userEmail || 'U').trim();
+    const parts = s.split(/\s+/).filter(Boolean);
+    const a = parts[0]?.[0] ?? 'U';
+    const b = parts[1]?.[0] ?? '';
+    return (a + b).toUpperCase();
+  })();
+
+  return (
+    <div className="w-64 bg-white text-slate-700 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-200 z-50">
+      {/* Logo Area */}
+      <div className="h-16 flex items-center px-6 border-b border-slate-200">
+        <div className="flex items-center gap-2 font-semibold text-base tracking-tight">
+          <Mail className="app-icon app-icon-brand w-6 h-6" />
+          <div className="leading-tight">
+            <div className="text-slate-900">FlowMail</div>
+            <div className="text-[11px] text-slate-500 font-medium">Campaigns & automation</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 py-6 px-3 space-y-1">
+        {menuItems.map((item) => {
+          const isActive = currentView === item.label;
+          return (
+            <button
+              key={item.label}
+              onClick={() => onViewChange(item.label)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-150 group ${
+                isActive
+                  ? 'bg-slate-50 text-slate-900 font-semibold border border-slate-200'
+                  : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+            >
+              <span className={`w-1 self-stretch rounded-full ${isActive ? 'bg-sky-600' : 'bg-transparent'}`} />
+              <item.icon className={`app-icon w-5 h-5 ${isActive ? 'app-icon-brand' : 'app-icon-muted'}`} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* User Profile / Bottom */}
+      <div className="p-4 border-t border-slate-200">
+        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-slate-50 transition-colors">
+          <div className="w-10 h-10 rounded-full bg-slate-900 flex items-center justify-center text-white font-semibold text-sm">
+            {initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-slate-900 truncate">{String(fullName)}</p>
+            <p className="text-xs text-slate-500 truncate">{userEmail}</p>
+          </div>
+          <button
+            type="button"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); void authActions.signOut(); }}
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-600"
+            title="Sign out"
+          >
+            <LogOut className="app-icon app-icon-muted w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Sidebar;

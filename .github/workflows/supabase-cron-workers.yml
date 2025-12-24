@@ -1,0 +1,72 @@
+name: supabase-cron-workers
+
+on:
+  schedule:
+    # Runs every 2 minutes. We gate some workers internally using minute modulo checks.
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-workers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run Edge Function workers
+        env:
+          SUPABASE_FUNCTIONS_BASE: ${{ secrets.SUPABASE_FUNCTIONS_BASE }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          WORKSPACE_ID: default
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_FUNCTIONS_BASE:-}" ]; then
+            echo "Missing secret SUPABASE_FUNCTIONS_BASE"
+            exit 1
+          fi
+          if [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "Missing secret SUPABASE_ANON_KEY"
+            exit 1
+          fi
+
+          minute=$(date -u +%M)
+          minute_int=$((10#$minute))
+
+          call_fn () {
+            fn="$1"
+            body="$2"
+            echo "Calling $fn ..."
+            curl -sS -X POST "${SUPABASE_FUNCTIONS_BASE}/${fn}" \
+              -H "Content-Type: application/json" \
+              -H "apikey: ${SUPABASE_ANON_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+              --data "${body}" \
+              | cat
+            echo ""
+          }
+
+          # Always: drain queued emails quickly
+          call_fn "email-send-worker" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"batch\":10}"
+
+          # Every 5 minutes: automation scanning/execution
+          if [ $((minute_int % 5)) -eq 0 ]; then
+            call_fn "automation-scanner" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"limit\":100}"
+            call_fn "automation-worker" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"batch\":10}"
+          fi
+
+          # Every 10 minutes: schedulers
+          if [ $((minute_int % 10)) -eq 0 ]; then
+            call_fn "newsletter-scheduler" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"limitSchedules\":3,\"limitRecipients\":200}"
+            call_fn "campaign-scheduler" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"limitSchedules\":2,\"limitRecipients\":300}"
+          fi
+
+          # Every 15 minutes: lead score updates
+          if [ $((minute_int % 15)) -eq 0 ]; then
+            call_fn "lead-score-worker" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"limit\":200}"
+          fi
+
+          # Every 30 minutes: best send time learning
+          if [ $((minute_int % 30)) -eq 0 ]; then
+            call_fn "best-time-worker" "{\"workspaceId\":\"${WORKSPACE_ID}\",\"limit\":200}"
+          fi
+
+
