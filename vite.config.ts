@@ -40,15 +40,9 @@ export default defineConfig(({ mode }) => {
         react(),
       ],
       define: {
-        // Make these available even if import.meta.env isn't populated as expected.
-        'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL ?? ''),
-        'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY ?? ''),
-        'process.env.VITE_WORKSPACE_ID': JSON.stringify(env.VITE_WORKSPACE_ID ?? ''),
-        'process.env.VITE_GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY ?? ''),
-
-        // Backward compatible Gemini shims (legacy code may read these)
-        'process.env.API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY ?? ''),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.VITE_GEMINI_API_KEY ?? env.GEMINI_API_KEY ?? ''),
+        // Some dependencies still probe NODE_ENV via process.env in browser builds.
+        // Replace it at build-time so Netlify doesn't need a Node `process` global.
+        'process.env.NODE_ENV': JSON.stringify(mode === 'production' ? 'production' : 'development'),
       },
       resolve: {
         alias: {

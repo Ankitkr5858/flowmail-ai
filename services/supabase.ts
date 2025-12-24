@@ -4,22 +4,27 @@ function envString(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
+function envFromGlobalProcess(key: string): string {
+  // In browsers (Netlify), `process` is not defined. Access it safely via globalThis.
+  const p = (globalThis as any)?.process;
+  return envString(p?.env?.[key]);
+}
+
 export function getSupabaseUrl(): string {
   // Prefer Vite env
   const url = envString((import.meta as any)?.env?.VITE_SUPABASE_URL);
   if (url) return url;
-  // Fallback if injected via vite `define`
-  return envString((process as any)?.env?.VITE_SUPABASE_URL);
+  return envFromGlobalProcess('VITE_SUPABASE_URL');
 }
 
 export function getSupabaseAnonKey(): string {
   const key = envString((import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY);
   if (key) return key;
-  return envString((process as any)?.env?.VITE_SUPABASE_ANON_KEY);
+  return envFromGlobalProcess('VITE_SUPABASE_ANON_KEY');
 }
 
 export function getWorkspaceId(): string {
-  const ws = envString((import.meta as any)?.env?.VITE_WORKSPACE_ID) || envString((process as any)?.env?.VITE_WORKSPACE_ID);
+  const ws = envString((import.meta as any)?.env?.VITE_WORKSPACE_ID) || envFromGlobalProcess('VITE_WORKSPACE_ID');
   return ws || 'default';
 }
 
