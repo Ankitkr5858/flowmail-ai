@@ -32,6 +32,14 @@ function json(data: unknown, status = 200) {
   });
 }
 
+function requireRunnerToken(req: Request): Response | null {
+  const required = (Deno.env.get("FLOWMAIL_RUNNER_TOKEN") ?? "").trim();
+  if (!required) return null; // not enforced
+  const got = String(req.headers.get("x-flowmail-runner-token") ?? "").trim();
+  if (!got || got !== required) return json({ error: "Unauthorized" }, 401);
+  return null;
+}
+
 async function dbFetch(path: string, init?: RequestInit) {
   const url = Deno.env.get("SUPABASE_URL");
   const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -177,6 +185,8 @@ async function makeUnsubUrl(workspaceId: string, contactId: string): Promise<str
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  const auth = requireRunnerToken(req);
+  if (auth) return auth;
 
   try {
     const gatewayUrl = Deno.env.get("MAIL_GATEWAY_URL") ?? "";

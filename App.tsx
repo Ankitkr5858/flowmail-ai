@@ -122,7 +122,8 @@ const App: React.FC = () => {
     const rows = parseContactsCsv(text);
     rows.forEach((row) => {
       actions.createContact({
-        leadScore: 40 + Math.round(Math.random() * 50),
+        // Production: avoid synthetic/random lead scores; use a sensible default.
+        leadScore: 50,
         ...row,
       });
     });
@@ -157,16 +158,6 @@ const App: React.FC = () => {
       const workspaceId = getWorkspaceId();
       const data = await invokeEdgeFunction<any>('send-campaign', { campaignId, workspaceId, limit: 50 });
       const queuedCount = Number((data as any)?.queued ?? 0);
-
-      // Kick the delivery worker immediately so sends feel "real-time".
-      // Queue is still the source of truth (retries/scheduling), but this drains it right away.
-      try {
-        if (queuedCount > 0) {
-          await invokeEdgeFunction<any>('email-send-worker', { workspaceId, batch: 25 });
-        }
-      } catch {
-        // ignore; cron/worker may still deliver later
-      }
 
       actions.updateCampaign(campaignId, {
         status: 'Sent',

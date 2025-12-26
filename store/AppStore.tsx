@@ -4,6 +4,7 @@ import { createSeedState } from '../services/seedData';
 import { loadFromStorage, saveToStorage } from '../services/storage';
 import { getSupabase, getWorkspaceId, isSupabaseConfigured } from '../services/supabase';
 import { createSupabaseRepo, type SupabaseRepo } from '../services/supabaseRepo';
+import { logContactEvent } from '../services/contactEvents';
 
 export type DateRangePreset = '30d' | '90d' | 'ytd';
 
@@ -42,6 +43,20 @@ function formatDisplayDate(iso: string): string {
 
 function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
+}
+
+function uniqStrings(xs: string[] | undefined | null): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of (xs ?? [])) {
+    const v = String(raw ?? '').trim();
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
 }
 
 function startForPreset(preset: DateRangePreset): Date {
@@ -554,10 +569,40 @@ const actions: AppActions = {
 
     setState((prev) => ({ ...prev, contacts: [contact, ...prev.contacts] }));
     void getRepo().then((repo) => repo?.upsertContact(contact));
+    // Emit timeline trigger/event rows in Supabase (used by automation-scanner).
+    void logContactEvent({
+      contactId: contact.id,
+      eventType: 'contact_created',
+      title: 'Contact Created',
+      occurredAt: createdAt,
+      meta: { source: contact.acquisitionSource ?? 'manual' },
+    });
+    // If created from a "website form", also emit a form_submitted trigger event.
+    const src = String(contact.acquisitionSource ?? '').toLowerCase();
+    if (src === 'website_form' || src === 'web form') {
+      void logContactEvent({
+        contactId: contact.id,
+        eventType: 'form_submitted',
+        title: 'Form Submitted',
+        occurredAt: createdAt,
+        meta: { form: 'Website Form' },
+      });
+    }
     return contact;
   },
 
   updateContact: (id, patch) => {
+    // Compute tag/list diffs before we update state.
+    const prevContact = getState().contacts.find((c) => c.id === id) ?? null;
+    const prevTags = uniqStrings(prevContact?.tags);
+    const prevLists = uniqStrings(prevContact?.lists);
+    const nextTags = patch.tags ? uniqStrings(patch.tags) : prevTags;
+    const nextLists = patch.lists ? uniqStrings(patch.lists) : prevLists;
+    const addedTags = nextTags.filter((t) => !prevTags.some((p) => p.toLowerCase() === t.toLowerCase()));
+    const removedTags = prevTags.filter((t) => !nextTags.some((n) => n.toLowerCase() === t.toLowerCase()));
+    const addedLists = nextLists.filter((t) => !prevLists.some((p) => p.toLowerCase() === t.toLowerCase()));
+    const removedLists = prevLists.filter((t) => !nextLists.some((n) => n.toLowerCase() === t.toLowerCase()));
+
     setState((prev) => {
       const updatedAt = nowIso();
       const contacts = prev.contacts.map((c) => {
@@ -579,6 +624,21 @@ const actions: AppActions = {
       const c = getState().contacts.find((x) => x.id === id);
       if (c) return repo.upsertContact(c);
     });
+
+    // Emit tag/list trigger events for automations (best-effort).
+    const occurredAt = nowIso();
+    for (const t of addedTags) {
+      void logContactEvent({ contactId: id, eventType: 'tag_added', title: `Tag Added: ${t}`, occurredAt, meta: { tag: t } });
+    }
+    for (const t of removedTags) {
+      void logContactEvent({ contactId: id, eventType: 'tag_removed', title: `Tag Removed: ${t}`, occurredAt, meta: { tag: t } });
+    }
+    for (const l of addedLists) {
+      void logContactEvent({ contactId: id, eventType: 'list_joined', title: `List Joined: ${l}`, occurredAt, meta: { list: l } });
+    }
+    for (const l of removedLists) {
+      void logContactEvent({ contactId: id, eventType: 'list_left', title: `List Left: ${l}`, occurredAt, meta: { list: l } });
+    }
   },
 
   deleteContact: (id) => {

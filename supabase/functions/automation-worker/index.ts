@@ -31,6 +31,14 @@ function json(data: unknown, status = 200) {
   });
 }
 
+function requireRunnerToken(req: Request): Response | null {
+  const required = (Deno.env.get("FLOWMAIL_RUNNER_TOKEN") ?? "").trim();
+  if (!required) return null; // not enforced
+  const got = String(req.headers.get("x-flowmail-runner-token") ?? "").trim();
+  if (!got || got !== required) return json({ error: "Unauthorized" }, 401);
+  return null;
+}
+
 async function dbFetch(path: string, init?: RequestInit) {
   const url = Deno.env.get("SUPABASE_URL");
   const service = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -107,6 +115,16 @@ function getNextId(step: any): string | null {
   return typeof n === "string" && n.length > 0 ? n : null;
 }
 
+function getNextAfter(step: any, steps: any[]): string | null {
+  // Primary: explicit link
+  const direct = getNextId(step);
+  if (direct) return direct;
+  // Fallback: treat the steps array ordering as the default flow
+  const idx = Array.isArray(steps) ? steps.findIndex((s) => String(s?.id) === String(step?.id)) : -1;
+  if (idx >= 0 && idx + 1 < steps.length) return String(steps[idx + 1]?.id ?? "") || null;
+  return null;
+}
+
 function getYesNo(step: any): { yes: string | null; no: string | null } {
   const y = step?.config?.nextYes;
   const n = step?.config?.nextNo;
@@ -129,6 +147,8 @@ function norm(s: unknown) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  const auth = requireRunnerToken(req);
+  if (auth) return auth;
 
   try {
     const body = await req.json().catch(() => ({}));
@@ -189,7 +209,7 @@ Deno.serve(async (req) => {
 
         if (step.type === "wait" || kind === "wait") {
           const days = Number(step?.config?.days ?? 1);
-          const next = getNextId(step);
+          const next = getNextAfter(step, steps);
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -326,7 +346,7 @@ Deno.serve(async (req) => {
             });
           }
 
-          const next = getNextId(step);
+          const next = getNextAfter(step, steps);
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -399,7 +419,7 @@ Deno.serve(async (req) => {
             }]),
           });
 
-          const next = getNextId(step);
+          const next = getNextAfter(step, steps);
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -440,7 +460,7 @@ Deno.serve(async (req) => {
             });
           }
 
-          const next = getNextId(step);
+          const next = getNextAfter(step, steps);
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -468,7 +488,7 @@ Deno.serve(async (req) => {
         // If there is no next step, mark run completed (best-effort)
         const stepNext = step.type === "condition"
           ? (getYesNo(step).yes || getYesNo(step).no)
-          : getNextId(step);
+          : getNextAfter(step, steps);
         if (!stepNext) {
           await dbFetch(`automation_runs?workspace_id=eq.${encodeURIComponent(workspaceId)}&id=eq.${encodeURIComponent(runId)}`, {
             method: "PATCH",
