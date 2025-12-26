@@ -536,8 +536,8 @@ const ReportsView: React.FC = () => {
                     <div className="text-sm text-slate-700 mb-3">
                       Showing <span className="font-semibold">{recipientRows.length}</span> most recent recipients (max 200).
                     </div>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden">
-                      <table className="w-full text-left text-sm">
+                    <div className="border border-slate-200 rounded-xl overflow-x-auto">
+                      <table className="w-full min-w-[560px] text-left text-sm">
                         <thead className="bg-slate-50 border-b border-slate-200">
                           <tr>
                             <th className="px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Email</th>

@@ -168,7 +168,7 @@ const SettingsView: React.FC = () => {
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
                 <h2 className="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">Personal Information</h2>
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">First Name</label>
                       <input value={firstName} onChange={(e) => setFirstName(e.target.value)} type="text" className="w-full bg-white text-slate-700 border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" />
@@ -193,7 +193,7 @@ const SettingsView: React.FC = () => {
                     <label className="block text-sm font-medium text-slate-700 mb-1">Company Name</label>
                     <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} type="text" className="w-full bg-white text-slate-700 border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Timezone</label>
                       <input value={timezone} onChange={(e) => setTimezone(e.target.value)} type="text" className="w-full bg-white text-slate-700 border border-slate-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="UTC" />

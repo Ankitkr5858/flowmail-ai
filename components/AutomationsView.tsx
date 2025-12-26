@@ -19,7 +19,7 @@ const AutomationsView: React.FC<AutomationsViewProps> = ({ automations, onCreate
   const [runsForId, setRunsForId] = useState<string | null>(null);
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Automations</h1>
           <p className="text-slate-500 text-sm mt-1">Build automated workflows triggered by user actions.</p>

@@ -615,7 +615,7 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
   return (
     <div className="space-y-6">
       {/* Top action bar (pro builder style) */}
-      <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-4 py-3 flex items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <button onClick={onBack} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors" title="Back">
             <ArrowLeft className="app-icon w-5 h-5" />
@@ -625,7 +625,7 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
             <div className="text-base font-semibold text-slate-900 truncate">{campaign.name}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => { ensureStyle(); onUpdate({ updatedAt: new Date().toISOString() }); }}
             className="bg-sky-600 hover:bg-sky-700 text-white px-4 py-2 rounded-lg font-semibold text-sm flex items-center gap-2 shadow-sm icon-on-solid"

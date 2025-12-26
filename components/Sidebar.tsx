@@ -8,12 +8,13 @@ import {
   FileText,
   Settings, 
   LogOut,
-  Mail
+  Mail,
+  X
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../store/AuthStore';
 
-const Sidebar: React.FC = () => {
+const Sidebar: React.FC<{ isOpen?: boolean; onClose?: () => void }> = ({ isOpen = false, onClose }) => {
   const { state: auth, actions: authActions } = useAuth();
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', to: '/dashboard' },
@@ -39,9 +40,23 @@ const Sidebar: React.FC = () => {
   })();
 
   return (
-    <div className="w-64 bg-white text-slate-700 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-200 z-50">
+    <>
+      {/* Mobile overlay */}
+      <button
+        type="button"
+        aria-label="Close navigation overlay"
+        onClick={() => onClose?.()}
+        className={`fixed inset-0 bg-black/40 z-[70] lg:hidden ${isOpen ? 'block' : 'hidden'}`}
+      />
+
+      <div
+        className={`w-64 bg-white text-slate-700 flex flex-col h-screen fixed left-0 top-0 border-r border-slate-200 z-[80]
+          transform transition-transform duration-200 ease-out
+          ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+          lg:translate-x-0`}
+      >
       {/* Logo Area */}
-      <div className="h-16 flex items-center px-6 border-b border-slate-200">
+      <div className="h-16 flex items-center px-6 border-b border-slate-200 justify-between">
         <div className="flex items-center gap-2 font-semibold text-base tracking-tight">
           <Mail className="app-icon app-icon-brand w-6 h-6" />
           <div className="leading-tight">
@@ -49,6 +64,14 @@ const Sidebar: React.FC = () => {
             <div className="text-[11px] text-slate-500 font-medium">Campaigns & automation</div>
           </div>
         </div>
+        <button
+          type="button"
+          onClick={() => onClose?.()}
+          className="lg:hidden p-2 rounded-lg hover:bg-slate-100 text-slate-700"
+          aria-label="Close navigation"
+        >
+          <X className="app-icon w-5 h-5" />
+        </button>
       </div>
 
       {/* Navigation */}
@@ -57,6 +80,7 @@ const Sidebar: React.FC = () => {
           <NavLink
             key={item.to}
             to={item.to}
+            onClick={() => onClose?.()}
             className={({ isActive }) =>
               `w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors duration-150 group ${
                 isActive
@@ -107,7 +131,8 @@ const Sidebar: React.FC = () => {
           )}
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 };
 

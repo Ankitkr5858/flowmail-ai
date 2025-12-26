@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
 import CampaignCreator from './components/CampaignCreator';
@@ -21,6 +21,7 @@ import ConfirmDialog from './components/ConfirmDialog';
 import AlertDialog from './components/AlertDialog';
 import LoginView from './components/LoginView';
 import { getWorkspaceId } from './services/supabase';
+import { Menu } from 'lucide-react';
 
 const App: React.FC = () => {
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
@@ -34,9 +35,11 @@ const App: React.FC = () => {
   const [sendPreview, setSendPreview] = useState<{ eligibleCount: number; limit: number; fromEmail: string | null } | null>(null);
   const [sendPreviewError, setSendPreviewError] = useState<string | null>(null);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const { state, actions } = useAppStore();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const metrics = useMemo(() => computeDashboardMetrics(state), [state]);
   const chartData = state.chartData;
@@ -224,11 +227,32 @@ const App: React.FC = () => {
     };
   }, [confirmSendId]);
 
+  // Close the mobile sidebar drawer on navigation
+  useEffect(() => {
+    setSidebarOpen(false);
+  }, [location.pathname, location.search, location.hash]);
+
   return (
-    <div className="flex min-h-screen bg-transparent">
-      <Sidebar />
-      
-      <main className="ml-64 flex-1 p-8 h-screen overflow-y-auto relative">
+    <div className="min-h-screen bg-transparent">
+      {/* Mobile top bar */}
+      <div className="lg:hidden sticky top-0 z-[60] border-b border-slate-200 bg-white/80 backdrop-blur">
+        <div className="h-14 px-4 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="p-2 rounded-lg hover:bg-slate-100 text-slate-700"
+            aria-label="Open navigation"
+          >
+            <Menu className="app-icon w-5 h-5" />
+          </button>
+          <div className="font-semibold text-slate-900">FlowMail</div>
+        </div>
+      </div>
+
+      <div className="flex min-h-screen">
+        <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+
+        <main className="flex-1 lg:ml-64 p-4 sm:p-6 lg:p-8 min-h-screen overflow-y-auto relative">
         <Routes>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/login" element={<LoginView />} />
@@ -308,7 +332,7 @@ const App: React.FC = () => {
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
 
-      </main>
+        </main>
 
       <CampaignCreator 
         isOpen={isCreatorOpen} 
@@ -351,6 +375,7 @@ const App: React.FC = () => {
         message={alert?.message ?? ''}
         onClose={() => setAlert(null)}
       />
+      </div>
     </div>
   );
 };

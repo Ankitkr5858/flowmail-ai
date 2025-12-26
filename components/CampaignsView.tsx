@@ -75,8 +75,8 @@ const CampaignsView: React.FC<CampaignsViewProps> = ({ onCreate, campaigns, onDe
       </div>
 
       {/* Campaigns Table */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-        <table className="w-full text-left">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
+        <table className="w-full min-w-[900px] text-left">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200">
               <th className="px-6 py-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Campaign Name</th>
