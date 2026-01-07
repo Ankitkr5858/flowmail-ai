@@ -38,31 +38,7 @@ function functionsBaseUrl(): string {
   return sbUrl ? `${sbUrl}/functions/v1` : "";
 }
 
-function bearerFrom(req: Request): string | null {
-  const h = String(req.headers.get("authorization") ?? "");
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m?.[1]?.trim() ? m[1].trim() : null;
-}
-
-async function authUserId(req: Request): Promise<string | null> {
-  const sbUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim().replace(/\/$/, "");
-  const service = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
-  const jwt = bearerFrom(req);
-  if (!sbUrl || !service || !jwt) return null;
-  const res = await fetch(`${sbUrl}/auth/v1/user`, {
-    method: "GET",
-    headers: {
-      apikey: service,
-      Authorization: `Bearer ${jwt}`,
-    },
-  });
-  if (!res.ok) return null;
-  const u = await res.json().catch(() => null);
-  const id = u?.id ? String(u.id).trim() : "";
-  return id || null;
-}
-
-async function requireRunnerTokenOrWorkspaceUser(req: Request, workspaceId: string): Promise<Response | null> {
+function requireRunnerToken(req: Request): Response | null {
   const required = (Deno.env.get("FLOWMAIL_RUNNER_TOKEN") ?? "").trim();
   // If runner token isn't configured, allow.
   if (!required) return null;
