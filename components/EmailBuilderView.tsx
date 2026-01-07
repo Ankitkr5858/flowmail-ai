@@ -226,7 +226,7 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === 'Escape') setEditingId(null);
             }}
-            className="w-full bg-white text-slate-900 font-bold outline-none rounded-md border border-sky-200 px-2 py-1"
+            className="flowmail-inline-editor w-full bg-transparent text-slate-900 font-bold outline-none px-1 py-1 border-0 shadow-none focus:shadow-none focus:ring-0"
             style={{ fontFamily: style.secondaryFont || fontFamily }}
           />
         );
@@ -241,7 +241,7 @@ export default function EmailBuilderView({ campaign, onBack, onUpdate }: EmailBu
             value={b.text}
             onChange={(e) => patchBlock(b.id, { text: e.target.value } as any)}
             onBlur={() => setEditingId(null)}
-            className="w-full h-32 bg-white text-slate-700 outline-none rounded-md border border-sky-200 px-2 py-1 resize-none"
+            className="flowmail-inline-editor w-full h-32 bg-transparent text-slate-700 outline-none px-1 py-1 border-0 shadow-none focus:shadow-none focus:ring-0 resize-none"
           />
         );
       }

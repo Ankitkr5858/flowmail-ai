@@ -32,6 +32,14 @@ function json(data: unknown, status = 200) {
   });
 }
 
+function functionsBaseUrl(): string {
+  const explicit = (Deno.env.get("PUBLIC_FUNCTIONS_BASE_URL") ?? "").trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  // Fallback: Supabase project URL is always available in the Edge runtime.
+  const sbUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim().replace(/\/$/, "");
+  return sbUrl ? `${sbUrl}/functions/v1` : "";
+}
+
 function requireRunnerToken(req: Request): Response | null {
   const required = (Deno.env.get("FLOWMAIL_RUNNER_TOKEN") ?? "").trim();
   if (!required) return null; // not enforced
@@ -162,7 +170,7 @@ function rewriteLinks(html: string, base: string, sid: string): string {
 
 async function makeUnsubUrl(workspaceId: string, contactId: string): Promise<string | null> {
   const secret = Deno.env.get("UNSUBSCRIBE_SIGNING_KEY") ?? "";
-  const base = Deno.env.get("PUBLIC_FUNCTIONS_BASE_URL") ?? "";
+  const base = functionsBaseUrl();
   if (!secret || !base) return null;
 
   const payload = { ws: workspaceId, contactId, exp: Date.now() + 1000 * 60 * 60 * 24 * 365 };
@@ -193,7 +201,7 @@ Deno.serve(async (req) => {
     const gatewayToken = Deno.env.get("MAIL_GATEWAY_TOKEN") ?? "";
     if (!gatewayUrl) return json({ error: "Missing MAIL_GATEWAY_URL secret" }, 500);
     if (!gatewayToken) return json({ error: "Missing MAIL_GATEWAY_TOKEN secret" }, 500);
-    const functionBase = Deno.env.get("PUBLIC_FUNCTIONS_BASE_URL") ?? "";
+    const functionBase = functionsBaseUrl();
 
     const body = await req.json().catch(() => ({}));
     const workspaceId = String(body?.workspaceId ?? "default") || "default";

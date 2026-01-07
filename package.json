@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "smtp-gateway": "node server/smtp-gateway.mjs"
+    "smtp-gateway": "node server/smtp-gateway.mjs",
+    "smoke:automation": "node scripts/smoke-automation.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

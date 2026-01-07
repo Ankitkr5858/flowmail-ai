@@ -15,6 +15,19 @@
 
 declare const Deno: any;
 
+const corsHeaders: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+};
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
 function gif1x1(): Uint8Array {
   // Transparent 1x1 GIF
   return new Uint8Array([
@@ -49,12 +62,35 @@ async function bumpMetric(workspaceId: string, contactId: string, metric: "open"
 
 Deno.serve(async (req) => {
   try {
+    if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
     const u = new URL(req.url);
     const sid = u.searchParams.get("sid") ?? "";
-    if (!sid) return new Response("ok", { status: 200 });
-
     const path = u.pathname;
     const nowIso = new Date().toISOString();
+
+    if (path.endsWith("/health")) {
+      const supabaseUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim();
+      const serviceKey = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
+      let dbOk = false;
+      let dbError: string | null = null;
+      if (supabaseUrl && serviceKey) {
+        try {
+          await dbFetch("email_sends?select=id&limit=1", { method: "GET" });
+          dbOk = true;
+        } catch (e) {
+          dbError = e instanceof Error ? e.message : String(e);
+        }
+      }
+      return json({
+        ok: Boolean(supabaseUrl && serviceKey && dbOk),
+        hasSupabaseUrl: Boolean(supabaseUrl),
+        hasServiceRoleKey: Boolean(serviceKey),
+        dbOk,
+        dbError,
+      });
+    }
+
+    if (!sid) return new Response("ok", { status: 200 });
 
     // Load send row
     const rows = await dbFetch(

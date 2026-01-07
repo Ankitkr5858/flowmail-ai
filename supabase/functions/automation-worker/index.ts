@@ -31,6 +31,13 @@ function json(data: unknown, status = 200) {
   });
 }
 
+function functionsBaseUrl(): string {
+  const explicit = (Deno.env.get("PUBLIC_FUNCTIONS_BASE_URL") ?? "").trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  const sbUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim().replace(/\/$/, "");
+  return sbUrl ? `${sbUrl}/functions/v1` : "";
+}
+
 function requireRunnerToken(req: Request): Response | null {
   const required = (Deno.env.get("FLOWMAIL_RUNNER_TOKEN") ?? "").trim();
   if (!required) return null; // not enforced
@@ -57,7 +64,7 @@ async function dbFetch(path: string, init?: RequestInit) {
 
 async function makeUnsubUrl(workspaceId: string, contactId: string): Promise<string | null> {
   const secret = Deno.env.get("UNSUBSCRIBE_SIGNING_KEY") ?? "";
-  const base = Deno.env.get("PUBLIC_FUNCTIONS_BASE_URL") ?? "";
+  const base = functionsBaseUrl();
   if (!secret || !base) return null;
 
   const payload = { ws: workspaceId, contactId, exp: Date.now() + 1000 * 60 * 60 * 24 * 365 };
@@ -206,10 +213,12 @@ Deno.serve(async (req) => {
         const lastOpen = contact?.last_open_date ? new Date(String(contact.last_open_date)) : null;
 
         const kind = String(step?.config?.kind ?? "");
+        let nextStepId: string | null = null;
 
         if (step.type === "wait" || kind === "wait") {
           const days = Number(step?.config?.days ?? 1);
           const next = getNextAfter(step, steps);
+          nextStepId = next;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -236,6 +245,7 @@ Deno.serve(async (req) => {
             op === "<=" ? leadScore <= value :
             leadScore > value;
           const next = pass ? (yes ?? "") : (no ?? "");
+          nextStepId = next || null;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -255,6 +265,7 @@ Deno.serve(async (req) => {
           const expected = norm(step?.config?.value ?? "lead");
           const { yes, no } = getYesNo(step);
           const next = (lifecycleStage === expected) ? (yes ?? "") : (no ?? "");
+          nextStepId = next || null;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -276,6 +287,7 @@ Deno.serve(async (req) => {
           const diffDays = lastOpen ? Math.floor((Date.now() - lastOpen.getTime()) / (1000 * 60 * 60 * 24)) : 999999;
           const pass = diffDays >= days; // "has not opened in N days"
           const next = pass ? (yes ?? "") : (no ?? "");
+          nextStepId = next || null;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -296,6 +308,7 @@ Deno.serve(async (req) => {
           const { yes, no } = getYesNo(step);
           const pass = !want ? true : tags.some((t) => norm(t) === want || norm(t).includes(want));
           const next = pass ? (yes ?? "") : (no ?? "");
+          nextStepId = next || null;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -347,6 +360,7 @@ Deno.serve(async (req) => {
           }
 
           const next = getNextAfter(step, steps);
+          nextStepId = next;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -420,6 +434,7 @@ Deno.serve(async (req) => {
           });
 
           const next = getNextAfter(step, steps);
+          nextStepId = next;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -461,6 +476,7 @@ Deno.serve(async (req) => {
           }
 
           const next = getNextAfter(step, steps);
+          nextStepId = next;
           if (next) {
             await dbFetch("automation_queue", {
               method: "POST",
@@ -485,11 +501,10 @@ Deno.serve(async (req) => {
           body: JSON.stringify({ status: "done", updated_at: new Date().toISOString() }),
         });
 
-        // If there is no next step, mark run completed (best-effort)
-        const stepNext = step.type === "condition"
-          ? (getYesNo(step).yes || getYesNo(step).no)
-          : getNextAfter(step, steps);
-        if (!stepNext) {
+        // Update run progression:
+        // - if we queued/scheduled a next step, set current_step_id to that step (next to execute)
+        // - otherwise mark run completed.
+        if (!nextStepId) {
           await dbFetch(`automation_runs?workspace_id=eq.${encodeURIComponent(workspaceId)}&id=eq.${encodeURIComponent(runId)}`, {
             method: "PATCH",
             headers: { Prefer: "return=minimal" },
@@ -499,7 +514,7 @@ Deno.serve(async (req) => {
           await dbFetch(`automation_runs?workspace_id=eq.${encodeURIComponent(workspaceId)}&id=eq.${encodeURIComponent(runId)}`, {
             method: "PATCH",
             headers: { Prefer: "return=minimal" },
-            body: JSON.stringify({ current_step_id: stepId, updated_at: new Date().toISOString() }),
+            body: JSON.stringify({ current_step_id: nextStepId, updated_at: new Date().toISOString() }),
           });
         }
 

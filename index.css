@@ -73,4 +73,11 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 4px var(--ring);
 }
 
+/* Email Builder inline editors should not show the global blue focus ring */
+input.flowmail-inline-editor:focus,
+textarea.flowmail-inline-editor:focus {
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 

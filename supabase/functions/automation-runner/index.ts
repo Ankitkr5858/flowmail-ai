@@ -97,6 +97,8 @@ Deno.serve(async (req) => {
     const results: Array<{ workspaceId: string; scanner?: any; worker?: any; email?: any; error?: string }> = [];
     for (const ws of wsIds) {
       try {
+        // Keep lead_score/temperature fresh from recent contact_events (used by automation conditions).
+        await callFn("lead-score-worker", tokenHeader, { workspaceId: ws, limit: scanLimit });
         const scanner = await callFn("automation-scanner", tokenHeader, { workspaceId: ws, limit: scanLimit });
         const worker = await callFn("automation-worker", tokenHeader, { workspaceId: ws, batch: stepBatch });
         const email = await callFn("email-send-worker", tokenHeader, { workspaceId: ws, batch: emailBatch });

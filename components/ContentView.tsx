@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { Blocks, FileEdit, Search } from 'lucide-react';
+import React, { useMemo } from 'react';
 import type { Campaign } from '../types';
 import { Card } from './ui/Card';
+import { Badge } from './ui/Badge';
 import { Button } from './ui/Button';
+import { FileText, Sparkles } from 'lucide-react';
 
 interface ContentViewProps {
   campaigns: Campaign[];
@@ -10,79 +11,96 @@ interface ContentViewProps {
   composeForContactName?: string | null;
 }
 
-const ContentView: React.FC<ContentViewProps> = ({ campaigns, onOpenBuilder, composeForContactName }) => {
-  const [q, setQ] = useState('');
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return campaigns;
-    return campaigns.filter(c => c.name.toLowerCase().includes(s) || (c.topic ?? '').toLowerCase().includes(s));
-  }, [campaigns, q]);
+function badgeVariantForStatus(status: Campaign['status']): React.ComponentProps<typeof Badge>['variant'] {
+  switch (status) {
+    case 'Sent':
+      return 'success';
+    case 'Scheduled':
+      return 'warning';
+    case 'Active':
+      return 'info';
+    case 'Draft':
+    default:
+      return 'default';
+  }
+}
+
+function formatUpdatedAt(c: Campaign) {
+  const iso = c.updatedAt ?? c.createdAt;
+  if (!iso) return c.date;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return c.date;
+  return d.toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit' });
+}
+
+export default function ContentView({ campaigns, onOpenBuilder, composeForContactName }: ContentViewProps) {
+  const rows = useMemo(() => {
+    return [...campaigns].sort((a, b) => {
+      const ta = new Date(a.updatedAt ?? a.createdAt ?? 0).getTime();
+      const tb = new Date(b.updatedAt ?? b.createdAt ?? 0).getTime();
+      return tb - ta;
+    });
+  }, [campaigns]);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800">Content</h1>
-        <p className="text-slate-500 text-sm mt-1">Build and manage campaign email content.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Content</h1>
+          <p className="text-slate-500 text-sm mt-1">Open an email campaign to edit its content in the builder.</p>
+        </div>
       </div>
 
       {composeForContactName && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-emerald-800 text-sm">
-          Composing an email for <span className="font-semibold">{composeForContactName}</span>. Choose a campaign below to edit/send content.
-        </div>
+        <Card className="p-4 flex items-start gap-3 bg-sky-50/60 border-sky-100">
+          <div className="w-10 h-10 rounded-lg bg-white border border-sky-100 flex items-center justify-center">
+            <Sparkles className="app-icon app-icon-brand w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-slate-900 truncate">Composing for {composeForContactName}</div>
+            <div className="text-xs text-slate-600 mt-0.5">
+              You can use placeholders like <span className="font-mono">{'{{firstName}}'}</span> inside your email content.
+            </div>
+          </div>
+        </Card>
       )}
 
-      <Card className="p-4 flex flex-col sm:flex-row gap-4 items-center justify-between">
-        <div className="relative w-full sm:w-96">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 app-icon app-icon-muted w-4 h-4" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search campaigns..."
-            className="w-full bg-white text-slate-700 pl-10 pr-4 py-2 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500 text-sm"
-          />
-        </div>
-        <div className="text-sm text-slate-500">
-          {filtered.length} campaigns
-        </div>
-      </Card>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filtered.map((c) => (
-          <Card key={c.id} className="p-6 hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center">
-                  <Blocks className="app-icon w-5 h-5" />
+      {rows.length === 0 ? (
+        <Card className="p-10 text-center">
+          <div className="mx-auto w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center">
+            <FileText className="app-icon app-icon-muted w-6 h-6" />
+          </div>
+          <div className="mt-4 font-semibold text-slate-900">No campaigns yet</div>
+          <div className="mt-1 text-sm text-slate-500">Create a campaign first, then come back here to edit its email.</div>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          {rows.map((c) => (
+            <Card key={c.id} className="p-6 hover:shadow-md transition-shadow">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-900 truncate">{c.name}</div>
+                  <div className="text-xs text-slate-500 mt-1 truncate">{c.subject || '(No subject)'}</div>
                 </div>
-                <div>
-                  <div className="font-semibold text-slate-800">{c.name}</div>
-                  <div className="text-xs text-slate-500 mt-1">{c.topic || '—'} • {c.status}</div>
-                </div>
+                <Badge variant={badgeVariantForStatus(c.status)}>{c.status}</Badge>
               </div>
-              <Button
-                onClick={() => onOpenBuilder(c.id)}
-                variant="outline"
-                size="sm"
-              >
-                <FileEdit className="app-icon w-4 h-4" />
-                Edit
-              </Button>
-            </div>
-            <div className="mt-4 text-sm text-slate-600 line-clamp-3 whitespace-pre-line">
-              {c.body || c.subject || 'No content yet. Open the builder to add blocks.'}
-            </div>
-          </Card>
-        ))}
-        {filtered.length === 0 && (
-          <Card className="col-span-full p-10 text-center text-slate-500">
-            No campaigns found.
-          </Card>
-        )}
-      </div>
+
+              <div className="mt-4 text-xs text-slate-500">Last updated: {formatUpdatedAt(c)}</div>
+
+              <div className="mt-5 flex items-center gap-2">
+                <Button variant="primary" onClick={() => onOpenBuilder(c.id)}>
+                  Edit in Builder
+                </Button>
+                <Button variant="outline" onClick={() => onOpenBuilder(c.id)}>
+                  Open
+                </Button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
-};
-
-export default ContentView;
+}
 
 
