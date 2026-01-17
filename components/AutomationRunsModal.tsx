@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
-import { getSupabase, getWorkspaceId } from '../services/supabase';
+import { getSupabase, isSupabaseConfigured } from '../services/supabase';
+import { invokeEdgeFunction } from '../services/edgeFunctions';
 
 type RunRow = {
   id: string;
@@ -17,39 +18,81 @@ export default function AutomationRunsModal({
   isOpen,
   onClose,
   automationId,
+  runId,
 }: {
   isOpen: boolean;
   onClose: () => void;
   automationId: string | null;
+  runId?: string | null;
 }) {
   const [rows, setRows] = useState<RunRow[]>([]);
   const [contactLabel, setContactLabel] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
-  const ws = getWorkspaceId();
+  const [error, setError] = useState<string>('');
 
   const title = useMemo(() => ('Automation Runs'), []);
 
   useEffect(() => {
     if (!isOpen) return;
-    const sb = getSupabase();
-    if (!sb) return;
     setLoading(true);
     (async () => {
-      const q = sb
-        .from('automation_runs')
-        .select('id, automation_id, contact_id, status, current_step_id, started_at, finished_at, last_error')
-        .eq('workspace_id', ws)
-        .order('started_at', { ascending: false })
-        .limit(50);
-      const res = automationId ? await q.eq('automation_id', automationId) : await q;
-      if (!res.error && Array.isArray(res.data)) {
-        setRows(res.data as any);
-        const ids = Array.from(new Set((res.data as any[]).map((r) => String(r.contact_id ?? '')).filter(Boolean)));
+      setError('');
+      let nextRows: any[] = [];
+      let edgeFailed = false;
+
+      // Prefer Edge Function (service-role read) so this works even if automation_runs RLS policies are missing.
+      if (isSupabaseConfigured()) {
+        try {
+          const out: any = await invokeEdgeFunction('automation-runs', {
+            // Let the Edge Function derive workspaceId from the caller's JWT (more reliable than localStorage).
+            automationId,
+            runId,
+            limit: 50,
+          });
+          nextRows = Array.isArray(out?.rows) ? out.rows : [];
+        } catch (e) {
+          edgeFailed = true;
+          const msg = e instanceof Error ? e.message : String(e);
+          // Only show an error if direct reads also fail; keep this quiet for now.
+          setError(msg);
+        }
+      }
+
+      // If the edge function isn't deployed (or failed), try direct reads as a fallback.
+      if (edgeFailed) {
+        const sb = getSupabase();
+        if (sb) {
+          const q = sb
+            .from('automation_runs')
+            .select('id, automation_id, contact_id, status, current_step_id, started_at, finished_at, last_error')
+            .order('started_at', { ascending: false })
+            .limit(50);
+          const res = runId
+            ? await q.eq('id', runId).limit(1)
+            : automationId
+              ? await q.eq('automation_id', automationId)
+              : await q;
+          if (!res.error && Array.isArray(res.data)) {
+            nextRows = res.data as any[];
+            setError(''); // direct read succeeded
+          } else if (res.error?.message) {
+            setError(String(res.error.message));
+          }
+        }
+      }
+
+      setRows(nextRows as any);
+      const ids = Array.from(new Set((nextRows as any[]).map((r) => String(r.contact_id ?? '')).filter(Boolean)));
         if (ids.length > 0) {
+          const sb = getSupabase();
+          if (!sb) {
+            setContactLabel({});
+            setLoading(false);
+            return;
+          }
           const { data: cRows } = await sb
             .from('contacts')
             .select('id,first_name,last_name,email')
-            .eq('workspace_id', ws)
             .in('id', ids.slice(0, 200));
           const map: Record<string, string> = {};
           (cRows ?? []).forEach((c: any) => {
@@ -62,13 +105,9 @@ export default function AutomationRunsModal({
         } else {
           setContactLabel({});
         }
-      } else {
-        setRows([]);
-        setContactLabel({});
-      }
       setLoading(false);
     })();
-  }, [isOpen, automationId, ws]);
+  }, [isOpen, automationId, runId]);
 
   if (!isOpen) return null;
 
@@ -88,6 +127,18 @@ export default function AutomationRunsModal({
         <div className="p-6">
           {loading ? (
             <div className="text-slate-600 text-sm">Loading…</div>
+          ) : error ? (
+            <div className="text-red-700 text-sm whitespace-pre-line">Failed to load runs.\n\n{error}</div>
+          ) : rows.length === 0 && runId ? (
+            <div className="text-slate-700 text-sm whitespace-pre-line">
+              No runs found for this test run id.
+              {'\n\n'}
+              This usually means the app can’t read `automation_runs` due to Supabase RLS, and the `automation-runs` Edge Function isn’t deployed yet.
+              {'\n\n'}
+              Fix: deploy the Edge Function `automation-runs`, then refresh and try again.
+              {'\n\n'}
+              Run id: {runId}
+            </div>
           ) : rows.length === 0 ? (
             <div className="text-slate-600 text-sm">No runs yet.</div>
           ) : (

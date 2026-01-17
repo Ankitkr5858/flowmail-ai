@@ -16,7 +16,7 @@ declare const Deno: any;
 
 const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-flowmail-runner-token",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -27,12 +27,41 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function requireRunnerToken(req: Request): Response | null {
+function bearerFrom(req: Request): string | null {
+  const h = String(req.headers.get("authorization") ?? "");
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() ? m[1].trim() : null;
+}
+
+async function authUserId(req: Request): Promise<string | null> {
+  const sbUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim().replace(/\/$/, "");
+  const service = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
+  const jwt = bearerFrom(req);
+  if (!sbUrl || !service || !jwt) return null;
+  const res = await fetch(`${sbUrl}/auth/v1/user`, {
+    method: "GET",
+    headers: {
+      apikey: service,
+      Authorization: `Bearer ${jwt}`,
+    },
+  });
+  if (!res.ok) return null;
+  const u = await res.json().catch(() => null);
+  const id = u?.id ? String(u.id).trim() : "";
+  return id || null;
+}
+
+async function requireRunnerTokenOrWorkspaceUser(req: Request, workspaceId: string): Promise<Response | null> {
   const required = (Deno.env.get("FLOWMAIL_RUNNER_TOKEN") ?? "").trim();
-  if (!required) return null; // not enforced
+  // If runner token isn't configured, allow.
+  if (!required) return null;
+  // Runner-token path (cron/runner).
   const got = String(req.headers.get("x-flowmail-runner-token") ?? "").trim();
-  if (!got || got !== required) return json({ error: "Unauthorized" }, 401);
-  return null;
+  if (got && got === required) return null;
+  // Interactive path: allow signed-in user if workspace matches their auth user id.
+  const uid = await authUserId(req);
+  if (uid && String(workspaceId).trim() === uid) return null;
+  return json({ error: "Unauthorized" }, 401);
 }
 
 async function dbFetch(path: string, init?: RequestInit) {
@@ -136,12 +165,12 @@ function triggerMatches(triggerStep: any, ev: any): boolean {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-  const auth = requireRunnerToken(req);
-  if (auth) return auth;
 
   try {
     const body = await req.json().catch(() => ({}));
     const workspaceId = String(body?.workspaceId ?? "default") || "default";
+    const auth = await requireRunnerTokenOrWorkspaceUser(req, workspaceId);
+    if (auth) return auth;
     const limit = Math.max(1, Math.min(200, Number(body?.limit ?? 50)));
 
     // Load cursor (latest row)

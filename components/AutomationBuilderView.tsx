@@ -19,6 +19,11 @@ import {
 } from 'lucide-react';
 import type { Automation, AutomationStep, AutomationStepType } from '../types';
 import { Select } from './ui/Select';
+import { invokeEdgeFunction } from '../services/edgeFunctions';
+import { getSupabase, getWorkspaceId, isSupabaseConfigured } from '../services/supabase';
+import { useAppStore } from '../store/AppStore';
+import AlertDialog from './AlertDialog';
+import AutomationRunsModal from './AutomationRunsModal';
 
 interface AutomationBuilderViewProps {
   automation: Automation;
@@ -132,6 +137,7 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
   const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [dragPos, setDragPos] = useState<{ stepId: string; x: number; y: number } | null>(null);
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const dragRef = useRef<{
     stepId: string;
@@ -139,9 +145,19 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
     offsetY: number;
     startX: number;
     startY: number;
+    latestX?: number;
+    latestY?: number;
   } | null>(null);
 
   const selectedStep = useMemo(() => steps.find(s => s.id === selectedStepId) ?? null, [steps, selectedStepId]);
+  const { state } = useAppStore();
+  const contacts = state.contacts ?? [];
+  const [isTestOpen, setIsTestOpen] = useState(false);
+  const [testContactId, setTestContactId] = useState<string>('');
+  const [testBusy, setTestBusy] = useState(false);
+  const [runsOpen, setRunsOpen] = useState(false);
+  const [focusRunId, setFocusRunId] = useState<string | null>(null);
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
 
   const addStep = (type: AutomationStepType, template: StepTemplate) => {
     const baseConfig =
@@ -191,6 +207,7 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
   const clampZoom = (z: number) => Math.max(0.5, Math.min(1.6, z));
 
   const getPos = (s: AutomationStep) => {
+    if (dragPos && dragPos.stepId === s.id) return { x: dragPos.x, y: dragPos.y };
     const cfg = (s.config ?? {}) as any;
     const x = Number(cfg.x);
     const y = Number(cfg.y);
@@ -225,7 +242,7 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
       const p = getPos(s);
       return { step: s, x: p.x, y: p.y, w, h };
     });
-  }, [steps]);
+  }, [steps, dragPos]);
 
   const stepById = useMemo(() => {
     const m = new Map<string, AutomationStep>();
@@ -291,7 +308,11 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
         // adjust for zoom
         const x = (e.clientX - offsetX - pan.x) / zoom;
         const y = (e.clientY - offsetY - pan.y) / zoom;
-        setPos(stepId, Math.round(x), Math.round(y));
+        const nx = Math.round(x);
+        const ny = Math.round(y);
+        dragRef.current.latestX = nx;
+        dragRef.current.latestY = ny;
+        setDragPos({ stepId, x: nx, y: ny });
       } else if (isPanning && panStartRef.current) {
         const dx = e.clientX - panStartRef.current.x;
         const dy = e.clientY - panStartRef.current.y;
@@ -299,7 +320,15 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
       }
     };
     const onUp = () => {
+      // Commit node position once (avoids storage/network races that can cause "jumping")
+      if (dragRef.current) {
+        const { stepId, latestX, latestY, startX, startY } = dragRef.current;
+        const cx = Number.isFinite(Number(latestX)) ? Number(latestX) : startX;
+        const cy = Number.isFinite(Number(latestY)) ? Number(latestY) : startY;
+        setPos(stepId, cx, cy);
+      }
       dragRef.current = null;
+      setDragPos(null);
       setIsPanning(false);
       panStartRef.current = null;
     };
@@ -309,7 +338,59 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [isPanning, pan.x, pan.y, steps, zoom]);
+  }, [isPanning, pan.x, pan.y, zoom]);
+
+  useEffect(() => {
+    if (!isTestOpen) return;
+    if (testContactId) return;
+    // Default to the first contact to make "Test run" one click.
+    const first = contacts[0]?.id;
+    if (first) setTestContactId(String(first));
+  }, [isTestOpen, testContactId, contacts]);
+
+  const runTest = async () => {
+    if (!isSupabaseConfigured()) {
+      setAlert({
+        title: 'Supabase not configured',
+        message: 'Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then sign in.',
+      });
+      return;
+    }
+    const cid = String(testContactId ?? '').trim();
+    if (!cid) {
+      setAlert({ title: 'Pick a contact', message: 'Select a contact to run this automation against.' });
+      return;
+    }
+    setTestBusy(true);
+    try {
+      const sb = getSupabase();
+      const ws =
+        sb
+          ? (await sb.auth.getSession().then(({ data }) => data.session?.user?.id).catch(() => null)) || getWorkspaceId() || 'default'
+          : getWorkspaceId() || 'default';
+      const triggerRes: any = await invokeEdgeFunction('automation-trigger', {
+        workspaceId: ws,
+        automationId: automation.id,
+        contactId: cid,
+      });
+      const workerRes: any = await invokeEdgeFunction('automation-worker', { workspaceId: ws, batch: 25 });
+      setIsTestOpen(false);
+      setFocusRunId(String(triggerRes?.runId ?? '') || null);
+      setRunsOpen(true);
+      setAlert({
+        title: 'Test run started',
+        message:
+          `Run created: ${String(triggerRes?.runId ?? '(unknown)')}\n` +
+          `Queue processed: ${String(workerRes?.processed ?? 0)} item(s)\n\n` +
+          `Open "Runs" to see status. If you have a Send Email step, it will enqueue an email in email_sends (delivery requires your SMTP gateway).`,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setAlert({ title: 'Test failed', message: msg });
+    } finally {
+      setTestBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -335,6 +416,31 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
           >
             <Save className="app-icon w-4 h-4" />
             Save
+          </button>
+          <button
+            onClick={() => setRunsOpen(true)}
+            className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-semibold text-sm flex items-center gap-2 icon-inherit"
+            title="View automation runs"
+          >
+            <Eye className="app-icon w-4 h-4" />
+            Runs
+          </button>
+          <button
+            onClick={() => {
+              if (!contacts.length) {
+                setAlert({
+                  title: 'No contacts yet',
+                  message: 'Create at least one contact (Contacts → New Contact), then come back and run a test.',
+                });
+                return;
+              }
+              setIsTestOpen(true);
+            }}
+            className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 px-4 py-2 rounded-lg font-semibold text-sm flex items-center gap-2 icon-inherit"
+            title="Create a run and process the queue once (quick smoke test)"
+          >
+            <Play className="app-icon w-4 h-4" />
+            Test Run
           </button>
           <button
             onClick={onToggleStatus}
@@ -481,17 +587,26 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
 
                   return (
                     <React.Fragment key={s.id}>
-                      <button
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select step: ${s.title}`}
                         onClick={() => setSelectedStepId(s.id)}
-                        className={`absolute text-left rounded-xl border shadow-sm bg-white px-4 py-3 transition-colors ${
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') setSelectedStepId(s.id);
+                        }}
+                        className={`absolute text-left rounded-xl border shadow-sm bg-white px-4 py-3 transition-colors cursor-grab select-none ${
                           isSelected ? 'border-sky-300 ring-2 ring-sky-100' : 'border-slate-200 hover:border-slate-300'
                         }`}
                         style={{ left: n.x, top: n.y, width: n.w, height: n.h }}
                         data-node="1"
                         onMouseDown={(e) => {
+                          // Select immediately so Step Settings doesn't "disappear" when the user drags slightly.
+                          setSelectedStepId(s.id);
                           // start drag (left button only)
                           if (e.button !== 0) return;
-                          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                          e.preventDefault();
+                          const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
                           dragRef.current = {
                             stepId: s.id,
                             offsetX: e.clientX - rect.left,
@@ -519,7 +634,7 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
                             <Trash2 className="app-icon w-4 h-4" />
                           </button>
                         </div>
-                      </button>
+                      </div>
                     </React.Fragment>
                   );
                 })}
@@ -950,6 +1065,68 @@ const AutomationBuilderView: React.FC<AutomationBuilderViewProps> = ({ automatio
           </div>
         </div>
       )}
+
+      {/* Test run modal */}
+      {isTestOpen && (
+        <div className="fixed inset-0 bg-black/50 z-[120] flex items-center justify-center backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="font-semibold text-slate-900">Test automation</div>
+              <button
+                onClick={() => { if (!testBusy) setIsTestOpen(false); }}
+                className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"
+                title="Close"
+              >
+                <X className="app-icon w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="text-sm text-slate-700">
+                This will create an <span className="font-semibold">automation run</span> for a contact and process the queue once.
+              </div>
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-slate-700">Contact</label>
+                <Select<string>
+                  value={testContactId}
+                  onChange={(v) => setTestContactId(String(v))}
+                  options={[
+                    { value: '', label: '— Select contact —' },
+                    ...contacts.slice(0, 200).map((c) => ({ value: c.id, label: `${c.name || c.email || c.id}` })),
+                  ]}
+                />
+              </div>
+              <div className="text-xs text-slate-500">
+                Tip: After running, open <span className="font-semibold">Runs</span> to confirm it completed (or see errors).
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-slate-100 bg-white flex items-center justify-end gap-2">
+              <button
+                disabled={testBusy}
+                onClick={() => setIsTestOpen(false)}
+                className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={testBusy}
+                onClick={() => { void runTest(); }}
+                className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 text-white font-semibold disabled:opacity-50"
+              >
+                {testBusy ? 'Running…' : 'Run test'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AutomationRunsModal
+        isOpen={runsOpen}
+        onClose={() => { setRunsOpen(false); setFocusRunId(null); }}
+        automationId={automation.id}
+        runId={focusRunId}
+      />
+
+      <AlertDialog isOpen={!!alert} title={alert?.title ?? 'Info'} message={alert?.message ?? ''} onClose={() => setAlert(null)} />
     </div>
   );
 };

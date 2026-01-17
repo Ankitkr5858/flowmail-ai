@@ -40,12 +40,25 @@ async function dbFetch(path: string, init?: RequestInit) {
   return body ? JSON.parse(body) : null;
 }
 
-function findFirstNextStep(steps: any[]): string | null {
+function getNextAfter(step: any, steps: any[]): string | null {
+  const next = step?.config?.next;
+  if (typeof next === "string" && next.length > 0) return next;
+  const idx = Array.isArray(steps) ? steps.findIndex((s) => String(s?.id) === String(step?.id)) : -1;
+  if (idx >= 0 && idx + 1 < steps.length) return String(steps[idx + 1]?.id ?? "") || null;
+  return null;
+}
+
+function findFirstExecutableStep(steps: any[]): string | null {
   if (!Array.isArray(steps) || steps.length === 0) return null;
-  // If there is a trigger with `next`, use it; else just take first step id.
-  const trigger = steps.find((s) => s?.type === "trigger" && typeof s?.config?.next === "string");
-  if (trigger?.config?.next) return String(trigger.config.next);
-  return String(steps[0]?.id ?? "") || null;
+  // Prefer the step AFTER the first trigger (matches scanner behavior).
+  const firstTrigger = steps.find((s) => s?.type === "trigger");
+  if (firstTrigger) {
+    const next = getNextAfter(firstTrigger, steps);
+    if (next) return next;
+  }
+  // Fallback: first non-trigger step, else the very first step.
+  const firstNonTrigger = steps.find((s) => s?.type && s.type !== "trigger");
+  return String(firstNonTrigger?.id ?? steps[0]?.id ?? "") || null;
 }
 
 Deno.serve(async (req) => {
@@ -68,7 +81,7 @@ Deno.serve(async (req) => {
     if (!automation) return json({ error: "Automation not found" }, 404);
 
     const steps = automation.steps ?? [];
-    const firstStepId = findFirstNextStep(steps);
+    const firstStepId = findFirstExecutableStep(steps);
     if (!firstStepId) return json({ error: "Automation has no steps" }, 400);
 
     // Create run

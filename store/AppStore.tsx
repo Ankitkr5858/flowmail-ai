@@ -5,6 +5,7 @@ import { loadFromStorage, saveToStorage } from '../services/storage';
 import { getSupabase, getWorkspaceId, isSupabaseConfigured } from '../services/supabase';
 import { createSupabaseRepo, type SupabaseRepo } from '../services/supabaseRepo';
 import { logContactEvent } from '../services/contactEvents';
+import { invokeEdgeFunction } from '../services/edgeFunctions';
 
 export type DateRangePreset = '30d' | '90d' | 'ytd';
 
@@ -308,6 +309,52 @@ let supaRepo: SupabaseRepo | null = null;
 let supaRepoWs: string | null = null;
 let supaInitStarted = false;
 
+// ---- Automation engine kick (best-effort, debounced) ----
+let automationKickTimer: number | null = null;
+let automationKickInFlight = false;
+let automationKickPending = false;
+
+function scheduleAutomationKickCurrent() {
+  void resolveWorkspaceIdFromSession().then((ws) => scheduleAutomationKick(ws));
+}
+
+function scheduleAutomationKick(workspaceId: string) {
+  if (!isSupabaseConfigured()) return;
+  const ws = String(workspaceId || getWorkspaceId() || 'default').trim() || 'default';
+  // Debounce bursts (eg: multiple tag changes).
+  if (automationKickTimer) window.clearTimeout(automationKickTimer);
+  automationKickTimer = window.setTimeout(() => {
+    automationKickTimer = null;
+    void runAutomationKick(ws);
+  }, 800);
+}
+
+async function runAutomationKick(workspaceId: string) {
+  if (!isSupabaseConfigured()) return;
+  if (automationKickInFlight) {
+    automationKickPending = true;
+    return;
+  }
+  automationKickInFlight = true;
+  try {
+    const ws = String(workspaceId || getWorkspaceId() || 'default').trim() || 'default';
+    // Process triggers -> queue -> steps. Email delivery is handled separately by SMTP gateway workers.
+    await invokeEdgeFunction('automation-scanner', { workspaceId: ws, limit: 200 });
+    await invokeEdgeFunction('automation-worker', { workspaceId: ws, batch: 25 });
+  } catch (e) {
+    // Keep UI resilient; missing runner tokens / not-yet-deployed functions shouldn't break primary actions.
+    // eslint-disable-next-line no-console
+    console.warn('[flowmail] automation kick failed:', e);
+  } finally {
+    automationKickInFlight = false;
+    if (automationKickPending) {
+      automationKickPending = false;
+      // Run once more to catch anything that arrived while we were processing.
+      void runAutomationKick(workspaceId);
+    }
+  }
+}
+
 async function resolveWorkspaceIdFromSession(): Promise<string> {
   const sb = getSupabase();
   if (!sb) return getWorkspaceId() || 'default';
@@ -577,6 +624,26 @@ const actions: AppActions = {
       occurredAt: createdAt,
       meta: { source: contact.acquisitionSource ?? 'manual' },
     });
+    // If tags/lists were set during creation, also emit those trigger events.
+    for (const t of uniqStrings(contact.tags)) {
+      void logContactEvent({
+        contactId: contact.id,
+        eventType: 'tag_added',
+        title: `Tag Added: ${t}`,
+        occurredAt: createdAt,
+        meta: { tag: t },
+      });
+    }
+    for (const l of uniqStrings(contact.lists)) {
+      void logContactEvent({
+        contactId: contact.id,
+        eventType: 'list_joined',
+        title: `List Joined: ${l}`,
+        occurredAt: createdAt,
+        meta: { list: l },
+      });
+    }
+    scheduleAutomationKickCurrent();
     // If created from a "website form", also emit a form_submitted trigger event.
     const src = String(contact.acquisitionSource ?? '').toLowerCase();
     if (src === 'website_form' || src === 'web form') {
@@ -587,6 +654,7 @@ const actions: AppActions = {
         occurredAt: createdAt,
         meta: { form: 'Website Form' },
       });
+      scheduleAutomationKickCurrent();
     }
     return contact;
   },
@@ -638,6 +706,9 @@ const actions: AppActions = {
     }
     for (const l of removedLists) {
       void logContactEvent({ contactId: id, eventType: 'list_left', title: `List Left: ${l}`, occurredAt, meta: { list: l } });
+    }
+    if (addedTags.length || removedTags.length || addedLists.length || removedLists.length) {
+      scheduleAutomationKickCurrent();
     }
   },
 
@@ -699,6 +770,9 @@ const actions: AppActions = {
       const a = getState().automations.find((x) => x.id === id);
       if (a) return repo.upsertAutomation(a);
     });
+    // If we just resumed automations, try to process pending events immediately (no external cron required).
+    const a = getState().automations.find((x) => x.id === id);
+    if (a?.status === 'Running') scheduleAutomationKickCurrent();
   },
 };
 
