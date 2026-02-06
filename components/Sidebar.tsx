@@ -9,6 +9,7 @@ import {
   Settings, 
   LogOut,
   Mail,
+  MailPlus,
   X
 } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
@@ -21,6 +22,7 @@ const Sidebar: React.FC<{ isOpen?: boolean; onClose?: () => void }> = ({ isOpen 
     { icon: Send, label: 'Campaigns', to: '/campaigns' },
     { icon: GitBranch, label: 'Automations', to: '/automations' },
     { icon: Users, label: 'Contacts', to: '/contacts' },
+    { icon: MailPlus, label: 'Bulk Email', to: '/bulk-email' },
     { icon: FileText, label: 'Content', to: '/content' },
     { icon: BarChart2, label: 'Reports', to: '/reports' },
     { icon: Settings, label: 'Settings', to: '/settings' },

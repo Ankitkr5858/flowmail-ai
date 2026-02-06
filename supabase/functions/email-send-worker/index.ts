@@ -4,13 +4,20 @@
 // - status = 'queued'
 // - execute_at <= now()
 //
-// Sends via an HTTP SMTP Gateway (Google SMTP Relay behind it) and updates provider_message_id + status + sent_at.
+// Sends via either:
+// - Resend (recommended when available) OR
+// - an HTTP SMTP Gateway (nodemailer behind it)
+// and updates provider_message_id + status + sent_at.
 //
 // Deploy:
 //   supabase functions deploy email-send-worker
 //
 // Secrets:
 //   SUPABASE_SERVICE_ROLE_KEY=...
+// Option A (Resend):
+//   RESEND_API_KEY=...
+//
+// Option B (SMTP Gateway):
 //   MAIL_GATEWAY_URL=...          (ex: https://your-domain.com)
 //   MAIL_GATEWAY_TOKEN=...        (Bearer token to protect gateway)
 // Optional (tracking/compliance):
@@ -75,6 +82,26 @@ async function gatewaySend(gatewayUrl: string, token: string, payload: any) {
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Mail gateway error ${res.status}: ${text}`);
+  return text ? JSON.parse(text) : null;
+}
+
+async function resendSend(apiKey: string, payload: { to: string; subject: string; html?: string; text?: string; from?: string }) {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      from: payload.from,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
+    }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`Resend error ${res.status}: ${text}`);
   return text ? JSON.parse(text) : null;
 }
 
@@ -197,10 +224,14 @@ Deno.serve(async (req) => {
   if (auth) return auth;
 
   try {
-    const gatewayUrl = Deno.env.get("MAIL_GATEWAY_URL") ?? "";
-    const gatewayToken = Deno.env.get("MAIL_GATEWAY_TOKEN") ?? "";
-    if (!gatewayUrl) return json({ error: "Missing MAIL_GATEWAY_URL secret" }, 500);
-    if (!gatewayToken) return json({ error: "Missing MAIL_GATEWAY_TOKEN secret" }, 500);
+    const resendApiKey = (Deno.env.get("RESEND_API_KEY") ?? "").trim();
+    const gatewayUrl = (Deno.env.get("MAIL_GATEWAY_URL") ?? "").trim();
+    const gatewayToken = (Deno.env.get("MAIL_GATEWAY_TOKEN") ?? "").trim();
+    const canUseResend = Boolean(resendApiKey);
+    const canUseGateway = Boolean(gatewayUrl && gatewayToken);
+    if (!canUseResend && !canUseGateway) {
+      return json({ error: "No mail provider configured. Set RESEND_API_KEY or MAIL_GATEWAY_URL+MAIL_GATEWAY_TOKEN." }, 500);
+    }
     const functionBase = functionsBaseUrl();
 
     const body = await req.json().catch(() => ({}));
@@ -285,14 +316,20 @@ Deno.serve(async (req) => {
         }
 
         const from = fromEmail ? `"${senderName.replaceAll('"', "")}" <${fromEmail}>` : undefined;
-        const sendRes = await gatewaySend(gatewayUrl, gatewayToken, { to, subject: subj, html, from });
-        const providerId = String(sendRes?.messageId ?? "");
+        if (!fromEmail) throw new Error("Missing from email (set workspace default_from_email or DEFAULT_FROM_EMAIL secret)");
+
+        const sendRes = canUseResend
+          ? await resendSend(resendApiKey, { to, subject: subj, html, from })
+          : await gatewaySend(gatewayUrl, gatewayToken, { to, subject: subj, html, from });
+
+        const provider = canUseResend ? "resend" : "smtp";
+        const providerId = canUseResend ? String(sendRes?.id ?? sendRes?.data?.id ?? "") : String(sendRes?.messageId ?? "");
 
         await dbFetch(`email_sends?workspace_id=eq.${encodeURIComponent(workspaceId)}&id=eq.${encodeURIComponent(id)}`, {
           method: "PATCH",
           headers: { Prefer: "return=minimal" },
           body: JSON.stringify({
-            provider: "smtp",
+            provider,
             provider_message_id: providerId || null,
             from_email: fromEmail,
             status: "sent",

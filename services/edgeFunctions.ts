@@ -15,15 +15,35 @@ export async function invokeEdgeFunction<TResponse>(
   const token = data.session?.access_token;
   if (!token) throw new Error('Not signed in');
 
-  const res = await fetch(`${baseUrl}/functions/v1/${name}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      apikey: anon,
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body ?? {}),
-  });
+  const url = `${baseUrl}/functions/v1/${name}`;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anon,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+  } catch (e) {
+    // Browser "Failed to fetch" typically indicates:
+    // - Edge Function not deployed (preflight fails)
+    // - Wrong SUPABASE URL
+    // - Network/CORS issues
+    const msg = e instanceof Error ? e.message : String(e);
+    const hint =
+      msg.toLowerCase().includes('failed to fetch')
+        ? `Could not reach Supabase Edge Function "${name}".\n\n` +
+          `Most common causes:\n` +
+          `- The function isn't deployed yet (run: supabase functions deploy ${name})\n` +
+          `- VITE_SUPABASE_URL is wrong\n` +
+          `- Network/CORS blocks the request\n\n` +
+          `URL: ${url}`
+        : `Failed to call Edge Function "${name}": ${msg}\nURL: ${url}`;
+    throw new Error(hint);
+  }
 
   const text = await res.text();
   const parsed = (() => {

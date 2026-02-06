@@ -33,11 +33,11 @@ const ReportsView: React.FC = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
-  const campaignOptions = useMemo(() => state.campaigns, [state.campaigns]);
+  const campaignOptions = useMemo(() => state.campaigns.filter((c) => c.id !== 'bulk_email'), [state.campaigns]);
 
   const selectedCampaign = useMemo(() => {
     if (selectedCampaignId === 'all') return null;
-    return state.campaigns.find(c => c.id === selectedCampaignId) ?? null;
+    return state.campaigns.find(c => c.id === selectedCampaignId && c.id !== 'bulk_email') ?? null;
   }, [selectedCampaignId, state.campaigns]);
 
   useEffect(() => {

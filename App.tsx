@@ -13,15 +13,16 @@ import SettingsView from './components/SettingsView';
 import ContactDetailView from './components/ContactDetailView';
 import ContactEditor from './components/ContactEditor';
 import AutomationBuilderView from './components/AutomationBuilderView';
+import BulkEmailView from './components/BulkEmailView';
 import { Campaign, Contact } from './types';
 import { computeDashboardMetrics, useAppStore } from './store/AppStore';
 import { parseContactsCsv } from './services/csvImport';
 import { invokeEdgeFunction } from './services/edgeFunctions';
-import ConfirmDialog from './components/ConfirmDialog';
 import AlertDialog from './components/AlertDialog';
 import LoginView from './components/LoginView';
 import { getWorkspaceId } from './services/supabase';
 import { Menu } from 'lucide-react';
+import SendCampaignModal from './components/SendCampaignModal';
 
 const App: React.FC = () => {
   const [isCreatorOpen, setIsCreatorOpen] = useState(false);
@@ -29,11 +30,8 @@ const App: React.FC = () => {
   const [isContactEditorOpen, setIsContactEditorOpen] = useState(false);
   const [editingContactId, setEditingContactId] = useState<string | null>(null);
   const [composeForContactId, setComposeForContactId] = useState<string | null>(null);
-  const [confirmSendId, setConfirmSendId] = useState<string | null>(null);
+  const [sendCampaignId, setSendCampaignId] = useState<string | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
-  const [sendPreviewBusy, setSendPreviewBusy] = useState(false);
-  const [sendPreview, setSendPreview] = useState<{ eligibleCount: number; limit: number; fromEmail: string | null } | null>(null);
-  const [sendPreviewError, setSendPreviewError] = useState<string | null>(null);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -46,6 +44,7 @@ const App: React.FC = () => {
   const campaigns = state.campaigns;
   const automations = state.automations;
   const contacts = state.contacts;
+  const visibleCampaigns = useMemo(() => campaigns.filter((c) => c.id !== 'bulk_email'), [campaigns]);
 
   const composeForContactName = useMemo(() => {
     if (!composeForContactId) return null;
@@ -149,14 +148,20 @@ const App: React.FC = () => {
     navigate(`/content/${encodeURIComponent(campaignId)}`);
   };
 
-  const sendCampaignNow = async (campaignId: string) => {
+  const sendCampaignNow = async (campaignId: string, opts?: { maxRecipients?: number; segmentJson?: any }) => {
     const campaign = campaigns.find(c => c.id === campaignId);
     if (!campaign) return;
 
     try {
       setSendBusy(true);
       const workspaceId = getWorkspaceId();
-      const data = await invokeEdgeFunction<any>('send-campaign', { campaignId, workspaceId, limit: 50 });
+      const data = await invokeEdgeFunction<any>('send-campaign', {
+        campaignId,
+        workspaceId,
+        maxRecipients: typeof opts?.maxRecipients === 'number' ? opts?.maxRecipients : 1000,
+        pageSize: 500,
+        segmentJson: opts?.segmentJson ?? null,
+      });
       const queuedCount = Number((data as any)?.queued ?? 0);
 
       actions.updateCampaign(campaignId, {
@@ -169,7 +174,7 @@ const App: React.FC = () => {
         clickRate: '0.0%',
         date: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       });
-      setAlert({ title: 'Queued', message: `Queued ${queuedCount} emails for delivery via SMTP.` });
+      setAlert({ title: 'Queued', message: `Queued ${queuedCount} emails for delivery.` });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setAlert({ title: 'Send failed', message: msg });
@@ -177,46 +182,6 @@ const App: React.FC = () => {
       setSendBusy(false);
     }
   };
-
-  // Pre-flight recipient preview for the confirm modal
-  useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      if (!confirmSendId) {
-        setSendPreview(null);
-        setSendPreviewError(null);
-        setSendPreviewBusy(false);
-        return;
-      }
-      try {
-        setSendPreviewBusy(true);
-        setSendPreview(null);
-        setSendPreviewError(null);
-        const data = await invokeEdgeFunction<any>('send-campaign', {
-          campaignId: confirmSendId,
-          workspaceId: getWorkspaceId(),
-          limit: 50,
-          dryRun: true,
-          sampleSize: 0,
-        });
-        if (cancelled) return;
-        const eligibleCount = Number((data as any)?.eligibleCount ?? 0);
-        const limit = Number((data as any)?.limit ?? 50);
-        const fromEmail = (data as any)?.fromEmail ? String((data as any).fromEmail) : null;
-        setSendPreview({ eligibleCount, limit, fromEmail });
-      } catch (e) {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : String(e);
-        setSendPreviewError(msg);
-      } finally {
-        if (!cancelled) setSendPreviewBusy(false);
-      }
-    };
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [confirmSendId]);
 
   // Close the mobile sidebar drawer on navigation
   useEffect(() => {
@@ -253,7 +218,7 @@ const App: React.FC = () => {
               <Dashboard
                 metrics={metrics}
                 chartData={chartData}
-                campaigns={campaigns.slice(0, 3)}
+                campaigns={visibleCampaigns.slice(0, 3)}
                 automations={automations.slice(0, 3)}
                 dateRangePreset={state.ui?.dateRangePreset ?? '30d'}
                 onDateRangePresetChange={actions.setDateRangePreset}
@@ -266,12 +231,12 @@ const App: React.FC = () => {
             element={
               <CampaignsView
                 onCreate={openCreator}
-                campaigns={campaigns}
+                campaigns={visibleCampaigns}
                 onDelete={handleDeleteCampaign}
                 onEdit={handleEditCampaign}
                 onAnalytics={handleViewAnalytics}
                 onOpenContent={(id) => navigate(`/content/${encodeURIComponent(id)}`)}
-                onSendNow={(id) => setConfirmSendId(id)}
+                onSendNow={(id) => setSendCampaignId(id)}
               />
             }
           />
@@ -312,11 +277,12 @@ const App: React.FC = () => {
           />
           <Route
             path="/content"
-            element={<ContentView campaigns={campaigns} onOpenBuilder={openEmailBuilder} composeForContactName={composeForContactName} />}
+            element={<ContentView campaigns={visibleCampaigns} onOpenBuilder={openEmailBuilder} composeForContactName={composeForContactName} />}
           />
+          <Route path="/bulk-email" element={<BulkEmailView />} />
           <Route
             path="/content/:campaignId"
-            element={<ContentBuilderRoute campaigns={campaigns} onBack={() => navigate('/content')} onUpdate={actions.updateCampaign} />}
+            element={<ContentBuilderRoute campaigns={visibleCampaigns} onBack={() => navigate('/content')} onUpdate={actions.updateCampaign} />}
           />
           <Route path="/reports" element={<ReportsRoute />} />
           <Route path="/settings" element={<SettingsView />} />
@@ -339,24 +305,15 @@ const App: React.FC = () => {
         initialContact={editingContactId ? contacts.find(c => c.id === editingContactId) ?? null : null}
       />
 
-      <ConfirmDialog
-        isOpen={!!confirmSendId}
-        title="Send campaign now?"
-        description={
-          sendPreviewBusy
-            ? 'Loading recipient preview…'
-            : sendPreviewError
-              ? `Could not load recipient preview.\n\nYou can still send if you want.\n\nError: ${sendPreviewError}`
-              : `This will enqueue emails and deliver via your SMTP Gateway.\n\nRecipients (limit ${sendPreview?.limit ?? 50}): ${sendPreview?.eligibleCount ?? 0}\nFrom: ${sendPreview?.fromEmail ?? '(not set)'}\n\nTo see the full recipient list after you send, open Reports → select this campaign.`
-        }
-        confirmText="Send Now"
-        cancelText="Cancel"
-        isLoading={sendBusy || sendPreviewBusy}
-        onCancel={() => { setConfirmSendId(null); }}
-        onConfirm={() => {
-          const id = confirmSendId;
-          setConfirmSendId(null);
-          if (id) void sendCampaignNow(id);
+      <SendCampaignModal
+        isOpen={!!sendCampaignId}
+        campaignId={sendCampaignId ?? ''}
+        onClose={() => setSendCampaignId(null)}
+        isSending={sendBusy}
+        onConfirm={({ maxRecipients, segmentJson }) => {
+          const id = sendCampaignId;
+          setSendCampaignId(null);
+          if (id) void sendCampaignNow(id, { maxRecipients, segmentJson });
         }}
       />
 

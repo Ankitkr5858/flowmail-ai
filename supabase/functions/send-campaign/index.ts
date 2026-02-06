@@ -3,7 +3,7 @@
 //   supabase functions deploy send-campaign
 //
 // Frontend calls:
-//   supabase.functions.invoke('send-campaign', { body: { campaignId, workspaceId?, limit? } })
+//   supabase.functions.invoke('send-campaign', { body: { campaignId, workspaceId?, maxRecipients?, pageSize?, segmentJson?, dryRun? } })
 
 // Avoid TS errors in the Vite workspace: these globals exist in the Supabase Edge runtime.
 declare const Deno: any;
@@ -62,6 +62,46 @@ function blocksToHtml(blocks: any[] | null | undefined, fallbackBody?: string) {
 // NOTE: We no longer send directly from this function.
 // We only enqueue rows into `email_sends`; `email-send-worker` performs SMTP delivery.
 
+function normalize(s: unknown): string {
+  return String(s ?? "").trim().toLowerCase();
+}
+
+// SegmentDefinition-compatible evaluator (same shape as UI + campaign/newsletter schedulers).
+function evalSegment(contact: any, seg: any): boolean {
+  if (!seg || typeof seg !== "object") return true;
+  const logic = String(seg.logic ?? "AND").toUpperCase() === "OR" ? "OR" : "AND";
+  const conds = Array.isArray(seg.conditions) ? seg.conditions : [];
+  if (conds.length === 0) return true;
+
+  const stage = normalize(contact.lifecycle_stage);
+  const temp = normalize(contact.temperature);
+  const tags: string[] = Array.isArray(contact.tags) ? contact.tags.map(normalize) : [];
+  const lists: string[] = Array.isArray(contact.lists) ? contact.lists.map(normalize) : [];
+  const leadScore = Number(contact.lead_score ?? 0);
+  const status = String(contact.status ?? "");
+
+  const check = (c: any) => {
+    const field = String(c.field ?? "");
+    const op = String(c.op ?? "");
+    const value = c.value;
+    if (field === "lifecycleStage") return stage === normalize(value);
+    if (field === "temperature") return temp === normalize(value);
+    if (field === "status") return status === String(value ?? "");
+    if (field === "tag") return tags.some((t) => t === normalize(value) || t.includes(normalize(value)));
+    if (field === "list") return lists.some((t) => t === normalize(value) || t.includes(normalize(value)));
+    if (field === "leadScore") {
+      const v = Number(value ?? 0);
+      if (op === ">=") return leadScore >= v;
+      if (op === "<=") return leadScore <= v;
+      if (op === ">") return leadScore > v;
+      if (op === "<") return leadScore < v;
+    }
+    return true;
+  };
+
+  return logic === "AND" ? conds.every(check) : conds.some(check);
+}
+
 // Minimal PostgREST access with the user's JWT (RLS applies).
 async function pgFetch(req: Request, path: string, init?: RequestInit) {
   const url = Deno.env.get("SUPABASE_URL");
@@ -89,9 +129,19 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const campaignId = String(body?.campaignId ?? "").trim();
     const workspaceId = String(body?.workspaceId ?? "default").trim() || "default";
-    const limit = Math.max(1, Math.min(200, Number(body?.limit ?? 50)));
+    // Backwards compatibility:
+    // - `limit` used to cap recipients for the whole send.
+    // New:
+    // - `maxRecipients` is the total cap across all pages
+    // - `pageSize` controls how many contacts we fetch/insert per chunk
+    const legacyLimit = Number(body?.limit ?? NaN);
+    const maxRecipientsRaw = Number(body?.maxRecipients ?? (Number.isFinite(legacyLimit) ? legacyLimit : 1000));
+    const maxRecipients = Math.max(1, Math.min(10000, maxRecipientsRaw));
+    const pageSizeRaw = Number(body?.pageSize ?? 500);
+    const pageSize = Math.max(1, Math.min(1000, pageSizeRaw));
     const dryRun = Boolean(body?.dryRun);
     const sampleSize = Math.max(0, Math.min(25, Number(body?.sampleSize ?? 10)));
+    const segmentJson = body?.segmentJson ?? null;
     if (!campaignId) return json({ error: "Missing campaignId" }, 400);
 
     // Load campaign
@@ -105,22 +155,34 @@ Deno.serve(async (req) => {
 
     const subject = String(campaign.subject ?? campaign.name ?? "Campaign").trim();
 
-    // Load recipients (subscribed + not suppressed)
-    const contacts = await pgFetch(
-      req,
-      `contacts?select=id,email,first_name,last_name,status,unsubscribed,bounced,spam_complaint&workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.Subscribed&unsubscribed=is.false&bounced=is.false&spam_complaint=is.false&limit=${limit}`,
-      { method: "GET" },
-    );
+    // Load recipients (subscribed + not suppressed), paged, then (optionally) segment-filtered.
+    const recipients: Array<{ id: string; email: string; firstName: string; lastName: string }> = [];
+    let offset = 0;
+    while (recipients.length < maxRecipients) {
+      const remaining = maxRecipients - recipients.length;
+      const fetchN = Math.max(1, Math.min(pageSize, remaining));
+      const contacts = await pgFetch(
+        req,
+        `contacts?select=id,email,first_name,last_name,status,unsubscribed,bounced,spam_complaint,lifecycle_stage,temperature,tags,lists,lead_score&workspace_id=eq.${encodeURIComponent(workspaceId)}&status=eq.Subscribed&unsubscribed=is.false&bounced=is.false&spam_complaint=is.false&order=created_at.asc&limit=${fetchN}&offset=${offset}`,
+        { method: "GET" },
+      );
+      const rows = Array.isArray(contacts) ? contacts : [];
+      if (rows.length === 0) break;
+      offset += rows.length;
 
-    const rows = Array.isArray(contacts) ? contacts : [];
-    const recipients = rows
-      .map((c: any) => ({
-        id: String(c.id ?? ""),
-        email: String(c.email ?? "").trim(),
-        firstName: String(c.first_name ?? "").trim(),
-        lastName: String(c.last_name ?? "").trim(),
-      }))
-      .filter((c: any) => Boolean(c.email));
+      for (const c of rows) {
+        if (recipients.length >= maxRecipients) break;
+        if (segmentJson && !evalSegment(c, segmentJson)) continue;
+        const email = String(c.email ?? "").trim();
+        if (!email) continue;
+        recipients.push({
+          id: String(c.id ?? ""),
+          email,
+          firstName: String(c.first_name ?? "").trim(),
+          lastName: String(c.last_name ?? "").trim(),
+        });
+      }
+    }
 
     if (dryRun) {
       return json({
@@ -129,8 +191,10 @@ Deno.serve(async (req) => {
         campaignId,
         workspaceId,
         eligibleCount: recipients.length,
-        limit,
+        maxRecipients,
+        pageSize,
         fromEmail: defaultFromEmail || null,
+        segmentApplied: Boolean(segmentJson),
         sampleEmails: recipients.slice(0, sampleSize).map((r: any) => r.email),
       });
     }
@@ -139,24 +203,32 @@ Deno.serve(async (req) => {
 
     // Enqueue per-recipient. SMTP delivery is handled by `email-send-worker`.
     const now = new Date().toISOString();
-    const inserts = recipients.map((r: any) => ({
-      workspace_id: workspaceId,
-      campaign_id: campaignId,
-      contact_id: r.id || null,
-      to_email: r.email,
-      from_email: defaultFromEmail || null,
-      subject,
-      status: "queued",
-      execute_at: now,
-      created_at: now,
-      updated_at: now,
-      meta: { source: "send-campaign" },
-    }));
-    await pgFetch(req, "email_sends", {
-      method: "POST",
-      headers: { Prefer: "return=minimal" },
-      body: JSON.stringify(inserts),
-    });
+    const meta = {
+      source: "send-campaign",
+      segment: segmentJson ?? null,
+      // Keep a small payload; avoid dumping huge objects in meta.
+    };
+    for (let i = 0; i < recipients.length; i += pageSize) {
+      const batch = recipients.slice(i, i + pageSize);
+      const inserts = batch.map((r: any) => ({
+        workspace_id: workspaceId,
+        campaign_id: campaignId,
+        contact_id: r.id || null,
+        to_email: r.email,
+        from_email: defaultFromEmail || null,
+        subject,
+        status: "queued",
+        execute_at: now,
+        created_at: now,
+        updated_at: now,
+        meta,
+      }));
+      await pgFetch(req, "email_sends", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify(inserts),
+      });
+    }
 
     // Update campaign basic counters (delivered assumed = sent) via PostgREST PATCH
     try {
@@ -178,7 +250,7 @@ Deno.serve(async (req) => {
       // ignore counter update errors (emails were queued)
     }
 
-    return json({ queued: recipients.length });
+    return json({ queued: recipients.length, maxRecipients, pageSize, segmentApplied: Boolean(segmentJson) });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return json({ error: message }, 500);
