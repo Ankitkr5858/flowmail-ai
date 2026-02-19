@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Search, Filter, Download, UserPlus, MoreVertical, Check, ChevronDown, Upload, Sparkles } from 'lucide-react';
 import type { Contact } from '../types';
 import { Button } from './ui/Button';
@@ -7,6 +8,7 @@ import { Badge } from './ui/Badge';
 import { Select } from './ui/Select';
 import SegmentBuilderModal, { evaluateSegment, type SegmentDefinition } from './SegmentBuilderModal';
 import SegmentSuggestionsModal from './SegmentSuggestionsModal';
+import ConfirmDialog from './ConfirmDialog';
 
 interface ContactsViewProps {
   contacts: Contact[];
@@ -14,21 +16,94 @@ interface ContactsViewProps {
   onOpenContact: (id: string) => void;
   onEditContact: (id: string) => void;
   onDeleteContact: (id: string) => void;
+  onDeleteSelectedContacts: (ids: string[]) => void;
   onImportCsv: (file: File) => void;
 }
 
-const ContactsView: React.FC<ContactsViewProps> = ({ contacts, onCreate, onOpenContact, onEditContact, onDeleteContact, onImportCsv }) => {
+const ContactsView: React.FC<ContactsViewProps> = ({
+  contacts,
+  onCreate,
+  onOpenContact,
+  onEditContact,
+  onDeleteContact,
+  onDeleteSelectedContacts,
+  onImportCsv,
+}) => {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [stageFilter, setStageFilter] = useState<'All' | 'cold' | 'lead' | 'mql' | 'customer' | 'churned'>('All');
   const [isImportOpen, setIsImportOpen] = useState(false);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [openMenu, setOpenMenu] = useState<null | { id: string; top: number; left: number }>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isSegOpen, setIsSegOpen] = useState(false);
   const [segment, setSegment] = useState<SegmentDefinition>({ logic: 'AND', conditions: [] });
   const [isSuggestOpen, setIsSuggestOpen] = useState(false);
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<{ title: string; description: string; confirmText: string } | null>(null);
+
+  useEffect(() => {
+    if (!openMenu) return;
+
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (menuRef.current?.contains(target)) return;
+      const triggerEl = target.closest('[data-contact-menu-trigger]');
+      if (triggerEl?.getAttribute('data-contact-menu-trigger') === openMenu.id) return;
+      setOpenMenu(null);
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenu(null);
+    };
+
+    const closeOnScrollOrResize = () => setOpenMenu(null);
+
+    document.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('scroll', closeOnScrollOrResize, true);
+    window.addEventListener('resize', closeOnScrollOrResize);
+
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('scroll', closeOnScrollOrResize, true);
+      window.removeEventListener('resize', closeOnScrollOrResize);
+    };
+  }, [openMenu]);
 
   const allSelected = contacts.length > 0 && selectedIds.length === contacts.length;
+  const selectedCount = selectedIds.length;
+
+  const handleDeleteSelected = () => {
+    if (selectedCount === 0) return;
+    const title = allSelected ? `Delete all ${selectedCount} contacts?` : `Delete ${selectedCount} selected contacts?`;
+    setDeleteDialog({
+      title,
+      description: 'This action cannot be undone.',
+      confirmText: allSelected ? 'Delete All' : 'Delete Selected',
+    });
+    setPendingDeleteIds(selectedIds);
+    setOpenMenu(null);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!pendingDeleteIds || pendingDeleteIds.length === 0) return;
+    if (pendingDeleteIds.length === 1) {
+      onDeleteContact(pendingDeleteIds[0]);
+    } else {
+      onDeleteSelectedContacts(pendingDeleteIds);
+    }
+    setSelectedIds((prev) => prev.filter((id) => !pendingDeleteIds.includes(id)));
+    setPendingDeleteIds(null);
+    setDeleteDialog(null);
+  };
+
+  const handleCancelDelete = () => {
+    setPendingDeleteIds(null);
+    setDeleteDialog(null);
+  };
 
   const handleSelectAll = () => {
     if (allSelected) {
@@ -135,6 +210,11 @@ const ContactsView: React.FC<ContactsViewProps> = ({ contacts, onCreate, onOpenC
             <UserPlus className="app-icon w-4 h-4" />
             Create Contact
           </Button>
+          {selectedCount > 0 && (
+            <Button type="button" variant="outline" onClick={handleDeleteSelected} className="border-red-200 text-red-700 hover:bg-red-50">
+              {allSelected ? `Delete All (${selectedCount})` : `Delete Selected (${selectedCount})`}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -286,32 +366,67 @@ const ContactsView: React.FC<ContactsViewProps> = ({ contacts, onCreate, onOpenC
                       </div>
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <div className="relative inline-block">
+                      <div className="inline-block">
                         <button
-                          onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === contact.id ? null : contact.id); }}
+                          data-contact-menu-trigger={contact.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const triggerEl = e.currentTarget as HTMLElement | null;
+                            if (!triggerEl) return;
+                            setOpenMenu((cur) => {
+                              if (cur?.id === contact.id) return null;
+
+                              const rect = triggerEl.getBoundingClientRect();
+                              const menuWidth = 160; // w-40
+                              const menuHeight = 96; // 2 items + padding (approx)
+                              const gap = 8;
+
+                              const preferredLeft = rect.right - menuWidth;
+                              const left = Math.min(Math.max(8, preferredLeft), window.innerWidth - menuWidth - 8);
+
+                              const spaceBelow = window.innerHeight - rect.bottom;
+                              const spaceAbove = rect.top;
+                              const openUpwards = spaceBelow < menuHeight + gap && spaceAbove >= menuHeight + gap;
+                              const preferredTop = openUpwards ? rect.top - menuHeight - gap : rect.bottom + gap;
+                              const top = Math.min(Math.max(8, preferredTop), window.innerHeight - menuHeight - 8);
+
+                              return { id: contact.id, top, left };
+                            });
+                          }}
                           className="p-1.5 hover:bg-slate-100 rounded-md text-slate-400 hover:text-sky-700 transition-colors"
                           title="Actions"
                         >
                           <MoreVertical className="app-icon app-icon-muted w-4 h-4" />
                         </button>
-                        {openMenuId === contact.id && (
+                        {openMenu?.id === contact.id && typeof document !== 'undefined' && createPortal(
                           <div
+                            ref={menuRef}
                             onClick={(e) => e.stopPropagation()}
-                            className="absolute right-0 mt-2 w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-20"
+                            style={{ position: 'fixed', top: openMenu.top, left: openMenu.left }}
+                            className="w-40 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden z-50"
                           >
                             <button
-                              onClick={() => { setOpenMenuId(null); onEditContact(contact.id); }}
+                              onClick={() => { setOpenMenu(null); onEditContact(contact.id); }}
                               className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 text-slate-700"
                             >
                               Edit
                             </button>
                             <button
-                              onClick={() => { setOpenMenuId(null); if (window.confirm('Delete this contact?')) onDeleteContact(contact.id); }}
+                              onClick={() => {
+                                setOpenMenu(null);
+                                setDeleteDialog({
+                                  title: 'Delete this contact?',
+                                  description: 'This action cannot be undone.',
+                                  confirmText: 'Delete',
+                                });
+                                setPendingDeleteIds([contact.id]);
+                              }}
                               className="w-full text-left px-4 py-3 text-sm hover:bg-red-50 text-red-700"
                             >
                               Delete
                             </button>
-                          </div>
+                          </div>,
+                          document.body
                         )}
                       </div>
                     </td>
@@ -347,6 +462,16 @@ const ContactsView: React.FC<ContactsViewProps> = ({ contacts, onCreate, onOpenC
         isOpen={isSuggestOpen}
         onClose={() => setIsSuggestOpen(false)}
         onApply={(seg) => setSegment(seg)}
+      />
+
+      <ConfirmDialog
+        isOpen={!!deleteDialog}
+        title={deleteDialog?.title ?? 'Confirm action'}
+        description={deleteDialog?.description}
+        confirmText={deleteDialog?.confirmText ?? 'Confirm'}
+        cancelText="Cancel"
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
       />
     </div>
   );

@@ -5,6 +5,7 @@ import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 import { Badge } from './ui/Badge';
 import AutomationRunsModal from './AutomationRunsModal';
+import ConfirmDialog from './ConfirmDialog';
 
 interface AutomationsViewProps {
   automations: Automation[];
@@ -17,6 +18,7 @@ interface AutomationsViewProps {
 const AutomationsView: React.FC<AutomationsViewProps> = ({ automations, onCreate, onOpen, onToggleStatus, onDelete }) => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [runsForId, setRunsForId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -79,7 +81,7 @@ const AutomationsView: React.FC<AutomationsViewProps> = ({ automations, onCreate
                        View Runs
                      </button>
                      <button
-                       onClick={() => { setOpenMenuId(null); if (window.confirm('Delete this automation?')) onDelete(automation.id); }}
+                      onClick={() => { setOpenMenuId(null); setPendingDeleteId(automation.id); }}
                        className="w-full text-left px-4 py-3 text-sm hover:bg-red-50 text-red-700"
                      >
                        Delete
@@ -137,6 +139,20 @@ const AutomationsView: React.FC<AutomationsViewProps> = ({ automations, onCreate
         isOpen={!!runsForId}
         onClose={() => setRunsForId(null)}
         automationId={runsForId}
+      />
+
+      <ConfirmDialog
+        isOpen={!!pendingDeleteId}
+        title="Delete this automation?"
+        description="This action cannot be undone."
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={() => {
+          if (!pendingDeleteId) return;
+          onDelete(pendingDeleteId);
+          setPendingDeleteId(null);
+        }}
+        onCancel={() => setPendingDeleteId(null)}
       />
     </div>
   );

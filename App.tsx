@@ -19,6 +19,7 @@ import { computeDashboardMetrics, useAppStore } from './store/AppStore';
 import { parseContactsCsv } from './services/csvImport';
 import { invokeEdgeFunction } from './services/edgeFunctions';
 import AlertDialog from './components/AlertDialog';
+import ConfirmDialog from './components/ConfirmDialog';
 import LoginView from './components/LoginView';
 import { getWorkspaceId } from './services/supabase';
 import { Menu } from 'lucide-react';
@@ -33,6 +34,7 @@ const App: React.FC = () => {
   const [sendCampaignId, setSendCampaignId] = useState<string | null>(null);
   const [sendBusy, setSendBusy] = useState(false);
   const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+  const [campaignToDelete, setCampaignToDelete] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const { state, actions } = useAppStore();
@@ -52,9 +54,7 @@ const App: React.FC = () => {
   }, [composeForContactId, contacts]);
 
   const handleDeleteCampaign = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this campaign? This action cannot be undone.')) {
-      actions.deleteCampaign(id);
-    }
+    setCampaignToDelete(id);
   };
 
   const handleEditCampaign = (campaign: Campaign) => {
@@ -264,8 +264,9 @@ const App: React.FC = () => {
                 onCreate={openContactCreator}
                 onOpenContact={handleOpenContact}
                 onEditContact={openContactEditor}
-                onDeleteContact={(id) => {
-                  if (window.confirm('Delete this contact? This cannot be undone.')) actions.deleteContact(id);
+                onDeleteContact={(id) => actions.deleteContact(id)}
+                onDeleteSelectedContacts={(ids) => {
+                  ids.forEach((id) => actions.deleteContact(id));
                 }}
                 onImportCsv={handleImportContactsCsv}
               />
@@ -323,6 +324,20 @@ const App: React.FC = () => {
         message={alert?.message ?? ''}
         onClose={() => setAlert(null)}
       />
+
+      <ConfirmDialog
+        isOpen={!!campaignToDelete}
+        title="Delete this campaign?"
+        description="This action cannot be undone."
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={() => {
+          if (!campaignToDelete) return;
+          actions.deleteCampaign(campaignToDelete);
+          setCampaignToDelete(null);
+        }}
+        onCancel={() => setCampaignToDelete(null)}
+      />
       </div>
     </div>
   );
@@ -333,21 +348,32 @@ export default App;
 function AutomationRoute({ automations, onBack }: { automations: any[]; onBack: () => void }) {
   const { actions } = useAppStore();
   const { automationId } = useParams();
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const automation = useMemo(() => automations.find((a: any) => a.id === automationId) ?? null, [automations, automationId]);
   if (!automation) return <Navigate to="/automations" replace />;
   return (
-    <AutomationBuilderView
-      automation={automation}
-      onBack={onBack}
-      onToggleStatus={() => actions.toggleAutomationStatus(automation.id)}
-      onDelete={() => {
-        if (window.confirm('Delete this automation?')) {
+    <>
+      <AutomationBuilderView
+        automation={automation}
+        onBack={onBack}
+        onToggleStatus={() => actions.toggleAutomationStatus(automation.id)}
+        onDelete={() => setConfirmDeleteOpen(true)}
+        onUpdate={(patch) => actions.updateAutomation(automation.id, patch)}
+      />
+      <ConfirmDialog
+        isOpen={confirmDeleteOpen}
+        title="Delete this automation?"
+        description="This action cannot be undone."
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={() => {
           actions.deleteAutomation(automation.id);
+          setConfirmDeleteOpen(false);
           onBack();
-        }
-      }}
-      onUpdate={(patch) => actions.updateAutomation(automation.id, patch)}
-    />
+        }}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
+    </>
   );
 }
 
